@@ -169,6 +169,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [secretsMap, setSecretsMap] = useState<
     Record<string, { phone: string; discord: string; pin: string; credHash: string }>
   >({});
+  const secretsMapRef = React.useRef<
+    Record<string, { phone: string; discord: string; pin: string; credHash: string }>
+  >({});
   const [fleet, setFleet] = useState<VehicleItem[]>(INITIAL_FLEET);
   const [hallOfFame, setHallOfFame] = useState<HallOfFameEntry[]>(INITIAL_HALL_OF_FAME);
   const [financials, setFinancials] = useState<CorporationFinancials>(INITIAL_FINANCIALS);
@@ -352,7 +355,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               const id = String(d.id);
               const existingUser = prevUsers.find((p) => p.id === id);
               const sec =
-                secretsMap[id] ||
+                secretsMapRef.current[id] ||
                 (existingUser && existingUser.phone !== 'Скрыто (Защита БД)'
                   ? {
                       phone: existingUser.phone,
@@ -527,37 +530,47 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       unsubReports();
       unsubLogs();
     };
-  }, [mapDocToUserProfile, secretsMap, triggerSyncPulse]);
+  }, [mapDocToUserProfile, triggerSyncPulse]);
 
   // Keep currentUser synced with live updates from `users`
   useEffect(() => {
     if (!currentUser) return;
     const updated = users.find((u) => u.id === currentUser.id);
+    const latestSec = secretsMap[currentUser.id] || secretsMapRef.current[currentUser.id];
     if (updated) {
       setCurrentUser((prev) => {
         if (!prev) return null;
         return {
           ...updated,
-          phone: updated.phone !== 'Скрыто (Защита БД)' ? updated.phone : prev.phone,
-          discord: updated.discord !== 'Скрыто (Защита БД)' ? updated.discord : prev.discord,
-          pin: updated.pin !== '••••' ? updated.pin : prev.pin,
+          phone:
+            latestSec?.phone ||
+            (updated.phone !== 'Скрыто (Защита БД)' ? updated.phone : prev.phone),
+          discord:
+            latestSec?.discord ||
+            (updated.discord !== 'Скрыто (Защита БД)' ? updated.discord : prev.discord),
+          pin: latestSec?.pin || (updated.pin !== '••••' ? updated.pin : prev.pin),
         };
       });
     }
-  }, [users, currentUser?.id]);
+  }, [users, secretsMap, currentUser?.id]);
 
-  // Load isolated secrets by computed vault ID ONLY when logged in as Owner or Admin
+  // Load isolated secrets by computed vault ID for current user (and all users if Owner/Admin)
   useEffect(() => {
     if (!currentUser) return;
-    if (currentUser.role !== 'owner' && currentUser.role !== 'admin') return;
 
     let cancelled = false;
-    async function loadSecretsForAdmin() {
+    async function loadSecrets() {
       const nextMap: Record<
         string,
         { phone: string; discord: string; pin: string; credHash: string }
       > = {};
-      for (const u of users) {
+
+      const targets =
+        currentUser?.role === 'owner' || currentUser?.role === 'admin'
+          ? users
+          : users.filter((u) => u.id === currentUser?.id);
+
+      for (const u of targets) {
         try {
           const vaultId = computeSecretVaultId(u.id);
           const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
@@ -575,6 +588,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
       if (!cancelled && Object.keys(nextMap).length > 0) {
+        secretsMapRef.current = { ...secretsMapRef.current, ...nextMap };
         setSecretsMap((prev) => ({ ...prev, ...nextMap }));
         setUsers((prev) =>
           prev.map((u) =>
@@ -590,11 +604,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         );
       }
     }
-    loadSecretsForAdmin();
+    loadSecrets();
     return () => {
       cancelled = true;
     };
-  }, [currentUser?.role, users.length]);
+  }, [currentUser?.id, currentUser?.role, users.length]);
 
   const addNotification = useCallback(
     (title: string, message: string, type: AppNotification['type'] = 'info') => {
@@ -690,11 +704,32 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       const profileData = profileSnap.data();
-      const loggedInUser = mapDocToUserProfile(profileData, {
+      let savedSecret = {
         phone: creds.phone.trim(),
         discord: creds.discord.trim(),
         pin: creds.pin.trim(),
-      });
+        credHash: inputHash,
+      };
+      try {
+        const vaultId = computeSecretVaultId(profileId);
+        const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
+        if (secSnap.exists()) {
+          const sd = secSnap.data();
+          savedSecret = {
+            phone: String(sd.phone || creds.phone.trim()),
+            discord: String(sd.discord || creds.discord.trim()),
+            pin: String(sd.pin || creds.pin.trim()),
+            credHash: String(sd.credHash || inputHash),
+          };
+        }
+      } catch {
+        // fallback to entered credentials
+      }
+
+      secretsMapRef.current = { ...secretsMapRef.current, [profileId]: savedSecret };
+      setSecretsMap((prev) => ({ ...prev, [profileId]: savedSecret }));
+
+      const loggedInUser = mapDocToUserProfile(profileData, savedSecret);
 
       // Update lastActive in Firestore
       try {
@@ -824,9 +859,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         credHash,
       });
 
+      const newSecEntry = { phone: phoneClean, discord: discordClean, pin: pinClean, credHash };
+      secretsMapRef.current = { ...secretsMapRef.current, [newId]: newSecEntry };
       setSecretsMap((prev) => ({
         ...prev,
-        [newId]: { phone: phoneClean, discord: discordClean, pin: pinClean, credHash },
+        [newId]: newSecEntry,
       }));
 
       addNotification(
@@ -866,7 +903,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!target) return;
 
     const vaultId = computeSecretVaultId(userId);
-    let currentSec = secretsMap[userId];
+    let currentSec = secretsMapRef.current[userId] || secretsMap[userId];
     if (!currentSec) {
       const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
       if (secSnap.exists()) {
@@ -912,19 +949,47 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
 
     try {
-      // If hash changed, remove old hash and create new hash in /auth_hashes
-      if (currentSec.credHash && currentSec.credHash !== nextCredHash) {
+      // Ensure root anchor hash always exists so isRootOwnerSeeded() in rules never breaks
+      const rootAnchorRef = doc(db, 'auth_hashes', ROOT_OWNER_HASH);
+      const rootAnchorSnap = await getDoc(rootAnchorRef);
+      if (!rootAnchorSnap.exists()) {
+        await setDoc(rootAnchorRef, {
+          id: ROOT_OWNER_HASH,
+          profileId: 'u-owner-root',
+          role: 'owner',
+        });
+      }
+
+      // Create new hash FIRST before deleting old hash, and never delete ROOT_OWNER_HASH
+      await setDoc(doc(db, 'auth_hashes', nextCredHash), {
+        id: nextCredHash,
+        profileId: target.id,
+        role: nextRole,
+      });
+
+      if (
+        currentSec.credHash &&
+        currentSec.credHash !== nextCredHash &&
+        currentSec.credHash !== ROOT_OWNER_HASH
+      ) {
         try {
           await deleteDoc(doc(db, 'auth_hashes', currentSec.credHash));
         } catch {
           // ignore if old hash didn't exist
         }
       }
-      await setDoc(doc(db, 'auth_hashes', nextCredHash), {
-        id: nextCredHash,
-        profileId: target.id,
-        role: nextRole,
-      });
+
+      const nextSecEntry = {
+        phone: nextPhone,
+        discord: nextDiscord,
+        pin: nextPin,
+        credHash: nextCredHash,
+      };
+      secretsMapRef.current = { ...secretsMapRef.current, [userId]: nextSecEntry };
+      setSecretsMap((prev) => ({
+        ...prev,
+        [userId]: nextSecEntry,
+      }));
 
       await setDoc(doc(db, 'staff_profiles', userId), {
         id: target.id,
@@ -958,10 +1023,24 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         credHash: nextCredHash,
       });
 
-      setSecretsMap((prev) => ({
-        ...prev,
-        [userId]: { phone: nextPhone, discord: nextDiscord, pin: nextPin, credHash: nextCredHash },
-      }));
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId
+            ? {
+                ...u,
+                displayName: nextDisplayName,
+                cid: nextCid,
+                phone: nextPhone,
+                discord: nextDiscord,
+                pin: nextPin,
+                role: nextRole,
+                rankNumber: nextRankNumber,
+                rankName: nextRankName,
+                department: nextDepartment,
+              }
+            : u
+        )
+      );
 
       await addAuditLog(
         'users',
@@ -1066,8 +1145,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (grandTotal <= 0) return;
 
-    const driverCut = grandTotal * 0.5;
-    const treasuryCut = grandTotal * 0.5;
+    const driverCut = grandTotal;
+    const treasuryCut = grandTotal;
 
     const updatedUser: UserProfile = {
       ...targetUser,
@@ -1103,11 +1182,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       await addAuditLog(
         'farm',
         'Начисление добычи',
-        `${targetUser.displayName}: начислено [Порода: ${items.rock}, Дерево: ${items.wood}, Цветы: ${items.blueFlower + items.redFlower + items.pinkFlower}]. Сотруднику: +$${driverCut.toLocaleString()}, в казну: +$${treasuryCut.toLocaleString()}`
+        `${targetUser.displayName}: начислено [Порода: ${items.rock}, Дерево: ${items.wood}, Цветы: ${items.blueFlower + items.redFlower + items.pinkFlower}]. Начислено рабочему по прайсу: +$${driverCut.toLocaleString()}`
       );
       addNotification(
         'Добыча начислена',
-        `${targetUser.displayName} получил +$${driverCut.toLocaleString()} (50%), в казну +$${treasuryCut.toLocaleString()} (50%)`,
+        `${targetUser.displayName} начислено +$${driverCut.toLocaleString()} по фиксированному прайсу`,
         'success'
       );
     } catch (error) {
@@ -1303,22 +1382,140 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const updateUserProfile = async (userId: string, updates: Partial<UserProfile>) => {
     if (!currentUser) return;
-    if (currentUser.role === 'owner' && (updates.phone || updates.discord)) {
-      await updateUserCredentialsByOwner(userId, {
-        phone: updates.phone,
-        discord: updates.discord,
+    const target = users.find((u) => u.id === userId) || currentUser;
+
+    const vaultId = computeSecretVaultId(userId);
+    let currentSec = secretsMapRef.current[userId] || secretsMap[userId];
+    if (!currentSec) {
+      try {
+        const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
+        if (secSnap.exists()) {
+          const sd = secSnap.data();
+          currentSec = {
+            phone: String(sd.phone || ''),
+            discord: String(sd.discord || ''),
+            pin: String(sd.pin || ''),
+            credHash: String(sd.credHash || ''),
+          };
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    if (!currentSec) {
+      currentSec = {
+        phone: target.phone !== 'Скрыто (Защита БД)' ? target.phone : currentUser.phone,
+        discord: target.discord !== 'Скрыто (Защита БД)' ? target.discord : currentUser.discord,
+        pin: target.pin !== '••••' ? target.pin : currentUser.pin,
+        credHash: computeCredentialHash(
+          target.displayName,
+          target.cid,
+          target.phone !== 'Скрыто (Защита БД)' ? target.phone : currentUser.phone,
+          target.discord !== 'Скрыто (Защита БД)' ? target.discord : currentUser.discord,
+          target.pin !== '••••' ? target.pin : currentUser.pin
+        ),
+      };
+    }
+
+    const nextPhone = (updates.phone ?? currentSec.phone).trim().slice(0, 64) || currentSec.phone;
+    const nextDiscord =
+      (updates.discord ?? currentSec.discord).trim().slice(0, 64) || currentSec.discord;
+    const nextPin = currentSec.pin;
+    const canEditVehAndNotes =
+      ROLE_DEFINITIONS[currentUser.role].permissions.canEditStaffVehicleAndNotes;
+    const nextAssignedVehicle =
+      canEditVehAndNotes && updates.assignedVehicle !== undefined
+        ? updates.assignedVehicle
+        : target.assignedVehicle || '-';
+    const nextBioNotes =
+      canEditVehAndNotes && updates.bioNotes !== undefined
+        ? updates.bioNotes
+        : target.bioNotes || '';
+
+    const nextCredHash = computeCredentialHash(
+      target.displayName,
+      target.cid,
+      nextPhone,
+      nextDiscord,
+      nextPin
+    );
+
+    try {
+      // Ensure ROOT_OWNER_HASH anchor always exists so rules validation succeeds
+      const rootAnchorRef = doc(db, 'auth_hashes', ROOT_OWNER_HASH);
+      const rootAnchorSnap = await getDoc(rootAnchorRef);
+      if (!rootAnchorSnap.exists()) {
+        await setDoc(rootAnchorRef, {
+          id: ROOT_OWNER_HASH,
+          profileId: 'u-owner-root',
+          role: 'owner',
+        });
+      }
+
+      // Create new login hash first, and never delete ROOT_OWNER_HASH
+      await setDoc(doc(db, 'auth_hashes', nextCredHash), {
+        id: nextCredHash,
+        profileId: target.id,
+        role: target.role,
       });
-    } else {
-      setCurrentUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              ...(updates.phone ? { phone: updates.phone } : {}),
-              ...(updates.discord ? { discord: updates.discord } : {}),
-            }
-          : null
+
+      if (
+        currentSec.credHash &&
+        currentSec.credHash !== nextCredHash &&
+        currentSec.credHash !== ROOT_OWNER_HASH
+      ) {
+        try {
+          await deleteDoc(doc(db, 'auth_hashes', currentSec.credHash));
+        } catch {
+          // ignore
+        }
+      }
+
+      const nextSecEntry = {
+        phone: nextPhone,
+        discord: nextDiscord,
+        pin: nextPin,
+        credHash: nextCredHash,
+      };
+      secretsMapRef.current = { ...secretsMapRef.current, [userId]: nextSecEntry };
+      setSecretsMap((prev) => ({
+        ...prev,
+        [userId]: nextSecEntry,
+      }));
+
+      await setDoc(doc(db, 'staff_secrets', vaultId), {
+        id: vaultId,
+        profileId: target.id,
+        phone: nextPhone,
+        discord: nextDiscord,
+        pin: nextPin,
+        credHash: nextCredHash,
+      });
+
+      const updatedProfileObj: UserProfile = {
+        ...target,
+        phone: nextPhone,
+        discord: nextDiscord,
+        pin: nextPin,
+        assignedVehicle: nextAssignedVehicle,
+        bioNotes: nextBioNotes,
+      };
+
+      await saveFullStaffProfileDoc(updatedProfileObj);
+
+      setUsers((prev) => prev.map((u) => (u.id === userId ? updatedProfileObj : u)));
+      if (currentUser.id === userId) {
+        setCurrentUser(updatedProfileObj);
+      }
+
+      await addAuditLog(
+        'profile',
+        'Обновление личных реквизитов',
+        `${currentUser.displayName} обновил рабочие реквизиты (Тел: ${nextPhone}, Discord: ${nextDiscord})`
       );
-      addNotification('Реквизиты сохранены', 'Контактные реквизиты обновлены.', 'success');
+      addNotification('Реквизиты сохранены', 'Рабочие реквизиты успешно сохранены в БД!', 'success');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
     }
   };
 
