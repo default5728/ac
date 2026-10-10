@@ -10,6 +10,7 @@ export const StaffCalculatorsView: React.FC = () => {
   const [pinkCount, setPinkCount] = useState<number>(0);
   const [copied, setCopied] = useState(false);
 
+  // Прямой подсчёт по фиксированному прайсу (без 50/50)
   const rockTotal = (rockCount || 0) * RESOURCE_PRICES.rock;
   const woodTotal = (woodCount || 0) * RESOURCE_PRICES.wood;
   const blueTotal = (blueCount || 0) * RESOURCE_PRICES.blueFlower;
