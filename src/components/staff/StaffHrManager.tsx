@@ -1,0 +1,947 @@
+import React, { useState } from 'react';
+import { useDatabase } from '../../context/DatabaseContext';
+import {
+  Users,
+  UserPlus,
+  KeyRound,
+  Trash2,
+  CheckCircle2,
+  Copy,
+  Check,
+  Search,
+  Filter,
+  Truck,
+  FileText,
+  Coins,
+  Save,
+  X,
+  PlusCircle,
+} from 'lucide-react';
+import { ROLE_DEFINITIONS, UserRole, UserProfile } from '../../types/database';
+
+export const StaffHrManager: React.FC = () => {
+  const {
+    users,
+    fleet,
+    currentUser,
+    createUserByAdmin,
+    updateUserCredentialsByOwner,
+    deleteUser,
+    updateStaffFarmStats,
+    recordFarmSubmission,
+    updateStaffVehicleAndNotes,
+  } = useDatabase();
+
+  const userRole = currentUser?.role || 'employee';
+  const isOwner = userRole === 'owner';
+  const canEditStaffFarm = ROLE_DEFINITIONS[userRole].permissions.canEditStaffFarm; // owner, admin, hr
+  const canEditVehAndNotes = ROLE_DEFINITIONS[userRole].permissions.canEditStaffVehicleAndNotes; // owner, admin
+
+  const [activeTab, setActiveTab] = useState<'roster' | 'create'>('roster');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
+
+  // New User Form State (Owner only)
+  const [newNick, setNewNick] = useState('');
+  const [newCid, setNewCid] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [newDiscord, setNewDiscord] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [newRole, setNewRole] = useState<UserRole>('employee');
+  const [newDepartment, setNewDepartment] = useState('Цех добычи');
+  const [newRankNumber, setNewRankNumber] = useState<number>(4);
+
+  const [createError, setCreateError] = useState('');
+  const [createdCredentialsCard, setCreatedCredentialsCard] = useState<{
+    nick: string;
+    cid: string;
+    phone: string;
+    discord: string;
+    pin: string;
+    roleTitle: string;
+  } | null>(null);
+  const [copiedNotice, setCopiedNotice] = useState(false);
+
+  // Edit PIN state (Owner only)
+  const [editingPinUserId, setEditingPinUserId] = useState<string | null>(null);
+  const [editPinValue, setEditPinValue] = useState('');
+
+  // Edit Vehicle & BioNotes state (Owner & Admin ONLY)
+  const [editingNotesUserId, setEditingNotesUserId] = useState<string | null>(null);
+  const [editNotesVal, setEditNotesVal] = useState('');
+
+  // Edit Farm Stats state (Owner, Admin, HR ONLY)
+  const [editingFarmUser, setEditingFarmUser] = useState<UserProfile | null>(null);
+  const [farmEditMode, setFarmEditMode] = useState<'add' | 'exact'>('add');
+  const [farmRock, setFarmRock] = useState('0');
+  const [farmWood, setFarmWood] = useState('0');
+  const [farmBlue, setFarmBlue] = useState('0');
+  const [farmRed, setFarmRed] = useState('0');
+  const [farmPink, setFarmPink] = useState('0');
+  const [farmWallet, setFarmWallet] = useState('0');
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateError('');
+    setCreatedCredentialsCard(null);
+
+    if (!newNick.trim() || !newCid.trim() || !newPhone.trim() || !newDiscord.trim() || !newPin.trim()) {
+      setCreateError('Все 5 полей (NickName, CID, Телефон, Discord, PIN) обязательны для заполнения!');
+      return;
+    }
+
+    const result = await createUserByAdmin({
+      displayName: newNick.trim(),
+      cid: newCid.trim().toUpperCase(),
+      phone: newPhone.trim(),
+      discord: newDiscord.trim(),
+      pin: newPin.trim(),
+      role: newRole,
+      rankNumber: Number(newRankNumber) || 4,
+      department: newDepartment.trim() || 'Цех добычи',
+    });
+
+    if (!result.success) {
+      setCreateError(result.error || 'Не удалось создать сотрудника.');
+      return;
+    }
+
+    setCreatedCredentialsCard({
+      nick: newNick.trim(),
+      cid: newCid.trim().toUpperCase(),
+      phone: newPhone.trim(),
+      discord: newDiscord.trim(),
+      pin: newPin.trim(),
+      roleTitle: ROLE_DEFINITIONS[newRole].title,
+    });
+
+    setNewNick('');
+    setNewCid('');
+    setNewPhone('');
+    setNewDiscord('');
+    setNewPin('');
+    setNewRole('employee');
+  };
+
+  const handleCopyCredentials = () => {
+    if (!createdCredentialsCard) return;
+    const text = `Реквизиты для входа в портал APATHY:
+Ник: ${createdCredentialsCard.nick}
+CID: ${createdCredentialsCard.cid}
+Телефон: ${createdCredentialsCard.phone}
+Discord: ${createdCredentialsCard.discord}
+PIN-код: ${createdCredentialsCard.pin}
+Роль: ${createdCredentialsCard.roleTitle}`;
+    navigator.clipboard.writeText(text);
+    setCopiedNotice(true);
+    setTimeout(() => setCopiedNotice(false), 2500);
+  };
+
+  const handleRoleChange = (userId: string, targetRole: UserRole) => {
+    if (!isOwner) return;
+    updateUserCredentialsByOwner(userId, { role: targetRole });
+  };
+
+  const handleRankChange = (userId: string, currentRank: number, delta: number) => {
+    if (!isOwner) return;
+    const next = Math.max(1, Math.min(10, currentRank + delta));
+    updateUserCredentialsByOwner(userId, { rankNumber: next });
+  };
+
+  const handleSavePin = (userId: string) => {
+    if (!isOwner) return;
+    if (!editPinValue.trim()) return;
+    updateUserCredentialsByOwner(userId, { pin: editPinValue.trim() });
+    setEditingPinUserId(null);
+    setEditPinValue('');
+  };
+
+  const handleOpenFarmModal = (u: UserProfile, mode: 'add' | 'exact') => {
+    setEditingFarmUser(u);
+    setFarmEditMode(mode);
+    if (mode === 'add') {
+      setFarmRock('0');
+      setFarmWood('0');
+      setFarmBlue('0');
+      setFarmRed('0');
+      setFarmPink('0');
+      setFarmWallet(String(u.walletBalance || 0));
+    } else {
+      setFarmRock(String(u.farmStats?.rock || 0));
+      setFarmWood(String(u.farmStats?.wood || 0));
+      setFarmBlue(String(u.farmStats?.blueFlower || 0));
+      setFarmRed(String(u.farmStats?.redFlower || 0));
+      setFarmPink(String(u.farmStats?.pinkFlower || 0));
+      setFarmWallet(String(u.walletBalance || 0));
+    }
+  };
+
+  const handleSaveFarmModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingFarmUser || !canEditStaffFarm) return;
+
+    const r = Math.max(0, parseInt(farmRock, 10) || 0);
+    const w = Math.max(0, parseInt(farmWood, 10) || 0);
+    const b = Math.max(0, parseInt(farmBlue, 10) || 0);
+    const rd = Math.max(0, parseInt(farmRed, 10) || 0);
+    const p = Math.max(0, parseInt(farmPink, 10) || 0);
+
+    if (farmEditMode === 'add') {
+      recordFarmSubmission(editingFarmUser.id, {
+        rock: r,
+        wood: w,
+        blueFlower: b,
+        redFlower: rd,
+        pinkFlower: p,
+      });
+    } else {
+      updateStaffFarmStats(editingFarmUser.id, {
+        rock: r,
+        wood: w,
+        blueFlower: b,
+        redFlower: rd,
+        pinkFlower: p,
+        walletBalance: Math.max(0, parseInt(farmWallet, 10) || 0),
+      });
+    }
+
+    setEditingFarmUser(null);
+  };
+
+  const filteredUsers = users.filter((u) => {
+    const matchesSearch =
+      u.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.cid.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.discord.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesRole = selectedRoleFilter === 'all' || u.role === selectedRoleFilter;
+    return matchesSearch && matchesRole;
+  });
+
+  return (
+    <div className="space-y-6 animate-fadeIn">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-xl font-black text-white flex items-center gap-2">
+            <Users className="w-5 h-5 text-cyan-400" />
+            Управление Персоналом & Реестр Аккаунтов
+          </h2>
+          <p className="text-xs text-zinc-400 mt-1">
+            {isOwner
+              ? 'Регистрация сотрудников (Владелец), закрепление авто и заметок (Владелец/Админ), управление добычей (Владелец/Админ/HR).'
+              : canEditVehAndNotes
+              ? 'Закрепление транспорта из автопарка, служебные заметки и редактирование добычи ресурсов.'
+              : canEditStaffFarm
+              ? 'Реестр сотрудников и управление добычей ресурсов персонала (Отдел кадров HR).'
+              : 'Служебный реестр сотрудников, должностей и текущей выработки.'}
+          </p>
+        </div>
+
+        {/* Tab switcher */}
+        <div className="flex items-center gap-2 bg-black/40 p-1 rounded-xl border border-white/10 font-mono-custom text-xs">
+          <button
+            onClick={() => setActiveTab('roster')}
+            className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
+              activeTab === 'roster'
+                ? 'bg-cyan-500 text-black font-bold'
+                : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            Штат сотрудников ({users.length})
+          </button>
+
+          {isOwner && (
+            <button
+              onClick={() => setActiveTab('create')}
+              className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'create'
+                  ? 'bg-purple-600 text-white font-bold'
+                  : 'text-purple-300 hover:bg-purple-950/40'
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Зарегистрировать сотрудника</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Farm Editor Modal (Owner, Admin, HR) */}
+      {canEditStaffFarm && editingFarmUser && (
+        <div className="p-6 rounded-2xl bg-zinc-950 border border-emerald-500/40 shadow-2xl animate-fadeIn font-mono-custom text-xs">
+          <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
+            <div className="flex items-center gap-2">
+              <Coins className="w-4 h-4 text-emerald-400" />
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase">
+                  Добыча ресурсов сотрудника: {editingFarmUser.displayName} (CID: {editingFarmUser.cid})
+                </h3>
+                <p className="text-[11px] text-zinc-400">
+                  Доступно только Владельцу, Администратору и Отделу кадров (HR)
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setEditingFarmUser(null)}
+              className="text-zinc-400 hover:text-white p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              type="button"
+              onClick={() => handleOpenFarmModal(editingFarmUser, 'add')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                farmEditMode === 'add'
+                  ? 'bg-emerald-500 text-black'
+                  : 'bg-white/5 text-zinc-400 hover:text-white'
+              }`}
+            >
+              + Добавить сданную добычу (50/50 в баланс и казну)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenFarmModal(editingFarmUser, 'exact')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                farmEditMode === 'exact'
+                  ? 'bg-cyan-500 text-black'
+                  : 'bg-white/5 text-zinc-400 hover:text-white'
+              }`}
+            >
+              Изменить точные значения в профиле
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveFarmModal} className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+              <div>
+                <label className="block text-amber-400 mb-1 text-[11px]">🪨 Порода (шт.):</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={farmRock}
+                  onChange={(e) => setFarmRock(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-cyan-400 mb-1 text-[11px]">🪵 Дерево (шт.):</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={farmWood}
+                  onChange={(e) => setFarmWood(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-blue-400 mb-1 text-[11px]">💠 Синий цв.:</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={farmBlue}
+                  onChange={(e) => setFarmBlue(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-rose-400 mb-1 text-[11px]">🌺 Красный цв.:</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={farmRed}
+                  onChange={(e) => setFarmRed(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-pink-400 mb-1 text-[11px]">🌸 Розовый цв.:</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={farmPink}
+                  onChange={(e) => setFarmPink(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                />
+              </div>
+              {farmEditMode === 'exact' && (
+                <div>
+                  <label className="block text-emerald-400 mb-1 text-[11px]">💰 Баланс ($):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={farmWallet}
+                    onChange={(e) => setFarmWallet(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-white"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingFarmUser(null)}
+                className="px-4 py-1.5 rounded-lg bg-white/5 text-zinc-400 hover:text-white cursor-pointer"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                className="px-5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold cursor-pointer"
+              >
+                {farmEditMode === 'add' ? 'Начислить добычу (50/50)' : 'Сохранить точные значения'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* TAB 1: CREATE USER (OWNER ONLY) */}
+      {isOwner && activeTab === 'create' && (
+        <div className="space-y-6">
+          <div className="p-6 rounded-2xl bg-zinc-950 border border-purple-500/40 shadow-2xl relative overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-6">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-purple-950 border border-purple-500/50 flex items-center justify-center text-purple-300">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Регистрация новой учетной записи
+                  </h3>
+                  <p className="text-[11px] text-zinc-400 font-mono-custom">
+                    Данные сохраняются в единую БД. Сотрудник входит по этим точным реквизитам.
+                  </p>
+                </div>
+              </div>
+
+              <span className="text-[10px] font-mono-custom px-2.5 py-1 rounded bg-purple-950/80 text-purple-300 border border-purple-500/30">
+                ПРАВА ВЛАДЕЛЬЦА
+              </span>
+            </div>
+
+            {createError && (
+              <div className="mb-4 p-3.5 rounded-xl bg-rose-950/80 border border-rose-500/40 text-rose-300 text-xs font-mono-custom">
+                {createError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 font-mono-custom text-xs">
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Игровой NickName: <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newNick}
+                    onChange={(e) => setNewNick(e.target.value)}
+                    placeholder="Alex_Mason"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    CID в игре: <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newCid}
+                    onChange={(e) => setNewCid(e.target.value)}
+                    placeholder="0042"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400 uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Телефон в игре: <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(e.target.value)}
+                    placeholder="555-789"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Discord тег: <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newDiscord}
+                    onChange={(e) => setNewDiscord(e.target.value)}
+                    placeholder="alex#0042"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Персональный PIN-код: <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value)}
+                    placeholder="1234"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">
+                    Роль в корпорации: <span className="text-rose-400">*</span>
+                  </label>
+                  <select
+                    value={newRole}
+                    onChange={(e) => setNewRole(e.target.value as UserRole)}
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  >
+                    <option value="admin">Администратор / Зам [09]</option>
+                    <option value="manager">Менеджер / Логист [06]</option>
+                    <option value="hr">Отдел кадров (HR) [05]</option>
+                    <option value="employee">Сотрудник / Фармер [04]</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">Отдел:</label>
+                  <input
+                    type="text"
+                    value={newDepartment}
+                    onChange={(e) => setNewDepartment(e.target.value)}
+                    placeholder="Цех добычи"
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-zinc-400 mb-1">Ранг (1-10):</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={newRankNumber}
+                    onChange={(e) => setNewRankNumber(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-white/10 flex items-center justify-between">
+                <span className="text-[11px] font-mono-custom text-zinc-500">
+                  Все 5 полей будут строго проверяться при входе в закрытый портал.
+                </span>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 rounded-xl font-bold text-xs bg-purple-500 hover:bg-purple-400 text-white transition-all flex items-center gap-2 shadow-lg shadow-purple-600/20 cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  Зарегистрировать сотрудника
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {createdCredentialsCard && (
+            <div className="p-6 rounded-2xl bg-emerald-950/30 border border-emerald-500/40 shadow-xl animate-fadeIn font-mono-custom">
+              <div className="flex items-center justify-between pb-3 border-b border-emerald-500/20 mb-4">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>Сотрудник успешно создан! Передайте ему реквизиты для входа:</span>
+                </div>
+                <button
+                  onClick={handleCopyCredentials}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {copiedNotice ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copiedNotice ? 'Скопировано!' : 'Скопировать для Discord'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs bg-black/50 p-4 rounded-xl border border-white/5">
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">NickName</span>
+                  <b className="text-white text-sm">{createdCredentialsCard.nick}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">CID</span>
+                  <b className="text-cyan-400 text-sm">{createdCredentialsCard.cid}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Телефон</span>
+                  <b className="text-zinc-200 text-sm">{createdCredentialsCard.phone}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Discord</span>
+                  <b className="text-blue-300 text-sm">{createdCredentialsCard.discord}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">PIN-код</span>
+                  <b className="text-amber-400 text-sm">{createdCredentialsCard.pin}</b>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: ROSTER & STAFF LIST */}
+      {activeTab === 'roster' && (
+        <div className="space-y-4">
+          {/* Search & Filter Bar */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Поиск по NickName, CID или Discord..."
+                className="w-full pl-10 pr-4 py-2 rounded-xl bg-zinc-950 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-zinc-500" />
+              <select
+                value={selectedRoleFilter}
+                onChange={(e) => setSelectedRoleFilter(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-zinc-950 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
+              >
+                <option value="all">Все роли ({users.length})</option>
+                <option value="owner">Владельцы</option>
+                <option value="admin">Администраторы</option>
+                <option value="manager">Менеджеры</option>
+                <option value="hr">Отдел кадров</option>
+                <option value="employee">Сотрудники / Фармеры</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredUsers.map((u) => {
+              const roleInfo = ROLE_DEFINITIONS[u.role];
+              const isRootOwner = u.role === 'owner';
+              const totalFlowers =
+                (u.farmStats?.blueFlower || 0) +
+                (u.farmStats?.redFlower || 0) +
+                (u.farmStats?.pinkFlower || 0);
+
+              return (
+                <div
+                  key={u.id}
+                  className="p-5 rounded-2xl bg-zinc-950 border border-white/10 flex flex-col justify-between shadow-lg"
+                >
+                  <div>
+                    {/* Header */}
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-white">{u.displayName}</h4>
+                        <div className="text-[11px] font-mono-custom text-zinc-400 mt-0.5">
+                          CID: <b className="text-cyan-400">{u.cid}</b> · Ранг [{u.rankNumber}] {u.rankName}
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-mono-custom px-2 py-0.5 rounded-full border ${roleInfo.badgeColor}`}>
+                        {roleInfo.title.split(' ')[0]}
+                      </span>
+                    </div>
+
+                    {/* Contact & Credentials Details */}
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono-custom text-xs space-y-1.5 mb-3">
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Телефон:</span>
+                        <span className="text-zinc-200">{u.phone}</span>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Discord:</span>
+                        <span className="text-blue-300">{u.discord}</span>
+                      </div>
+                      {isOwner && (
+                        <div className="flex justify-between text-zinc-400 pt-1 border-t border-white/5">
+                          <span>PIN для входа:</span>
+                          <span className="text-amber-400 font-bold">{u.pin}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Статус:</span>
+                        <span className={u.status === 'on_shift' ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>
+                          {u.status === 'on_shift' ? '● На смене' : '○ Отдых'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Assigned Vehicle & Service Notes (Editable ONLY by Owner & Admin) */}
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono-custom text-[11px] space-y-2 mb-3">
+                      <div>
+                        <div className="text-zinc-500 flex items-center gap-1 text-[10px] mb-1">
+                          <Truck className="w-3 h-3 text-cyan-400" />
+                          <span>Закреплённый транспорт (из автопарка):</span>
+                        </div>
+                        {canEditVehAndNotes ? (
+                          <select
+                            value={u.assignedVehicle || '-'}
+                            onChange={(e) =>
+                              updateStaffVehicleAndNotes(u.id, { assignedVehicle: e.target.value })
+                            }
+                            className="w-full px-2 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-white text-[11px] focus:outline-none focus:border-cyan-400"
+                          >
+                            <option value="-">— Не закреплён —</option>
+                            {fleet.map((veh) => {
+                              const label = `${veh.modelName} [${veh.plate}]`;
+                              return (
+                                <option key={veh.id} value={label}>
+                                  {veh.modelName} [{veh.plate}] ({veh.trunkKg} кг)
+                                </option>
+                              );
+                            })}
+                          </select>
+                        ) : (
+                          <div className="text-zinc-200 font-semibold">
+                            {u.assignedVehicle && u.assignedVehicle !== '-'
+                              ? u.assignedVehicle
+                              : '— Не закреплён —'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="pt-1.5 border-t border-white/5">
+                        <div className="flex items-center justify-between text-zinc-500 text-[10px] mb-1">
+                          <span className="flex items-center gap-1">
+                            <FileText className="w-3 h-3 text-cyan-400" />
+                            Служебные заметки:
+                          </span>
+                          {canEditVehAndNotes && editingNotesUserId !== u.id && (
+                            <button
+                              onClick={() => {
+                                setEditingNotesUserId(u.id);
+                                setEditNotesVal(u.bioNotes || '');
+                              }}
+                              className="text-cyan-400 hover:underline cursor-pointer"
+                            >
+                              Изменить
+                            </button>
+                          )}
+                        </div>
+
+                        {canEditVehAndNotes && editingNotesUserId === u.id ? (
+                          <div className="space-y-1.5">
+                            <textarea
+                              rows={2}
+                              value={editNotesVal}
+                              onChange={(e) => setEditNotesVal(e.target.value)}
+                              className="w-full px-2 py-1 rounded bg-zinc-900 border border-cyan-500/40 text-white text-[11px] focus:outline-none"
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => {
+                                  updateStaffVehicleAndNotes(u.id, { bioNotes: editNotesVal });
+                                  setEditingNotesUserId(null);
+                                }}
+                                className="px-2.5 py-1 rounded bg-cyan-500 text-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                              >
+                                <Save className="w-3 h-3" />
+                                Сохранить
+                              </button>
+                              <button
+                                onClick={() => setEditingNotesUserId(null)}
+                                className="px-2 py-1 rounded bg-zinc-800 text-zinc-400 text-[10px] cursor-pointer"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-zinc-300 leading-snug">
+                            {u.bioNotes || '—'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Real Farm Stats (Editable by Owner, Admin, HR) */}
+                    <div className="p-3 rounded-xl bg-zinc-900/60 border border-white/5 font-mono-custom text-[11px] space-y-1 mb-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-zinc-500 uppercase text-[9px] font-bold tracking-wider">
+                          Добыча ресурсов (Фарм):
+                        </span>
+                        {canEditStaffFarm && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleOpenFarmModal(u, 'add')}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-900 flex items-center gap-0.5 cursor-pointer"
+                              title="Начислить сданную добычу (+50/50)"
+                            >
+                              <PlusCircle className="w-2.5 h-2.5" />
+                              <span>+Добыча</span>
+                            </button>
+                            <button
+                              onClick={() => handleOpenFarmModal(u, 'exact')}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-900 cursor-pointer"
+                              title="Редактировать точные цифры добычи"
+                            >
+                              Ред.
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>🪨 Порода ($5.000):</span>
+                        <b className="text-white">{u.farmStats?.rock || 0} шт.</b>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>🪵 Дерево ($2.500):</span>
+                        <b className="text-white">{u.farmStats?.wood || 0} шт.</b>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>🌸 Цветы ($1.500):</span>
+                        <b className="text-white">{totalFlowers} шт.</b>
+                      </div>
+                      <div className="flex justify-between text-emerald-400 pt-1 border-t border-white/5 font-bold">
+                        <span>Баланс выплат (50%):</span>
+                        <span>${u.walletBalance.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Owner Controls */}
+                  {isOwner && (
+                    <div className="pt-3 border-t border-white/10 space-y-2 font-mono-custom text-xs">
+                      {!isRootOwner ? (
+                        <>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-zinc-500 shrink-0">Роль:</span>
+                            <select
+                              value={u.role}
+                              onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
+                              className="flex-1 bg-black/60 border border-white/10 rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-cyan-400"
+                            >
+                              <option value="admin">Администратор [09]</option>
+                              <option value="manager">Менеджер [06]</option>
+                              <option value="hr">Отдел кадров [05]</option>
+                              <option value="employee">Сотрудник [04]</option>
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleRankChange(u.id, u.rankNumber, 1)}
+                              className="flex-1 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-cyan-300 transition-colors cursor-pointer"
+                            >
+                              +1 Ранг
+                            </button>
+                            <button
+                              onClick={() => handleRankChange(u.id, u.rankNumber, -1)}
+                              className="flex-1 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-zinc-400 transition-colors cursor-pointer"
+                            >
+                              -1 Ранг
+                            </button>
+                          </div>
+
+                          {editingPinUserId === u.id ? (
+                            <div className="flex gap-1 pt-1">
+                              <input
+                                type="text"
+                                value={editPinValue}
+                                onChange={(e) => setEditPinValue(e.target.value)}
+                                placeholder="Новый PIN"
+                                className="w-24 px-2 py-1 rounded bg-black border border-amber-500/40 text-amber-300 text-xs focus:outline-none"
+                              />
+                              <button
+                                onClick={() => handleSavePin(u.id)}
+                                className="px-2 py-1 bg-amber-500 text-black font-bold rounded text-[10px] cursor-pointer"
+                              >
+                                Сохранить
+                              </button>
+                              <button
+                                onClick={() => setEditingPinUserId(null)}
+                                className="px-2 py-1 bg-zinc-800 text-zinc-400 rounded text-[10px] cursor-pointer"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setEditingPinUserId(u.id);
+                                setEditPinValue(u.pin);
+                              }}
+                              className="w-full py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-amber-300 text-center block transition-colors cursor-pointer"
+                            >
+                              Сменить PIN-код ({u.pin})
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => deleteUser(u.id)}
+                            className="w-full py-1 rounded bg-rose-950/40 hover:bg-rose-950 border border-rose-500/30 text-[10px] text-rose-300 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Забрать доступ (Удалить)
+                          </button>
+                        </>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="text-[10px] text-purple-400 text-center">
+                            Аккаунт Владельца корпорации
+                          </div>
+                          {editingPinUserId === u.id ? (
+                            <div className="flex gap-1">
+                              <input
+                                type="text"
+                                value={editPinValue}
+                                onChange={(e) => setEditPinValue(e.target.value)}
+                                placeholder="Новый PIN"
+                                className="w-24 px-2 py-1 rounded bg-black border border-amber-500/40 text-amber-300 text-xs focus:outline-none"
+                              />
+                              <button
+                                onClick={() => handleSavePin(u.id)}
+                                className="px-2 py-1 bg-amber-500 text-black font-bold rounded text-[10px] cursor-pointer"
+                              >
+                                Сохранить
+                              </button>
+                              <button
+                                onClick={() => setEditingPinUserId(null)}
+                                className="px-2 py-1 bg-zinc-800 text-zinc-400 rounded text-[10px] cursor-pointer"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setEditingPinUserId(u.id);
+                                setEditPinValue(u.pin);
+                              }}
+                              className="w-full py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-amber-300 text-center block transition-colors cursor-pointer"
+                            >
+                              Сменить PIN Владельца ({u.pin})
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

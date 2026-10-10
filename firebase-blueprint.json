@@ -1,0 +1,460 @@
+{
+  "entities": {
+    "AuthHashRecord": {
+      "title": "AuthHashRecord",
+      "description": "Zero-knowledge credential hash lookup record (list is forbidden)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "profileId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "admin", "manager", "hr", "employee"]
+        }
+      },
+      "required": ["id", "profileId", "role"]
+    },
+    "StaffProfile": {
+      "title": "StaffProfile",
+      "description": "Operational staff profile without sensitive PIN, phone, discord, or hash",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "username": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "admin", "manager", "hr", "employee"]
+        },
+        "cid": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "rankNumber": {
+          "type": "number"
+        },
+        "rankName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "department": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "walletBalance": {
+          "type": "number"
+        },
+        "rock": {
+          "type": "number"
+        },
+        "wood": {
+          "type": "number"
+        },
+        "blueFlower": {
+          "type": "number"
+        },
+        "redFlower": {
+          "type": "number"
+        },
+        "pinkFlower": {
+          "type": "number"
+        },
+        "totalEarned": {
+          "type": "number"
+        },
+        "assignedVehicle": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": ["on_shift", "off_duty"]
+        },
+        "bioNotes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "joinedAt": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "lastActive": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "displayName",
+        "role",
+        "cid",
+        "rankNumber",
+        "rankName",
+        "department",
+        "walletBalance",
+        "rock",
+        "wood",
+        "blueFlower",
+        "redFlower",
+        "pinkFlower",
+        "totalEarned",
+        "assignedVehicle",
+        "status",
+        "bioNotes",
+        "joinedAt",
+        "lastActive"
+      ]
+    },
+    "StaffSecret": {
+      "title": "StaffSecret",
+      "description": "Isolated PII and PIN record keyed by secret vault ID (list is forbidden)",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "profileId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "discord": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "pin": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "credHash": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": ["id", "profileId", "phone", "discord", "pin", "credHash"]
+    },
+    "CorpState": {
+      "title": "CorpState",
+      "description": "Global corporation financials and analytics KPI",
+      "type": "object",
+      "properties": {
+        "treasuryBalance": {
+          "type": "number"
+        },
+        "weeklyGain": {
+          "type": "number"
+        },
+        "rock": {
+          "type": "number"
+        },
+        "wood": {
+          "type": "number"
+        },
+        "blueFlower": {
+          "type": "number"
+        },
+        "redFlower": {
+          "type": "number"
+        },
+        "pinkFlower": {
+          "type": "number"
+        },
+        "totalEarned": {
+          "type": "number"
+        },
+        "activeWorkersCount": {
+          "type": "number"
+        },
+        "radioFrequency": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "treasuryBalance",
+        "weeklyGain",
+        "rock",
+        "wood",
+        "blueFlower",
+        "redFlower",
+        "pinkFlower",
+        "totalEarned",
+        "activeWorkersCount",
+        "radioFrequency"
+      ]
+    },
+    "VehicleItem": {
+      "title": "VehicleItem",
+      "description": "Corporation fleet vehicle item",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "modelName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "trunkKg": {
+          "type": "number"
+        },
+        "rankRequired": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "slot": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Готов к выезду", "В рейсе", "Ремонт", "Зарезервирован", "Дежурство СБ"]
+        },
+        "fuelPercent": {
+          "type": "number"
+        },
+        "plate": {
+          "type": "string",
+          "maxLength": 32
+        }
+      },
+      "required": [
+        "id",
+        "modelName",
+        "category",
+        "trunkKg",
+        "rankRequired",
+        "slot",
+        "status",
+        "fuelPercent",
+        "plate"
+      ]
+    },
+    "HallOfFameEntry": {
+      "title": "HallOfFameEntry",
+      "description": "Hall of Fame monthly winner entry",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "place": {
+          "type": "number"
+        },
+        "nickname": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "cid": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "rankTitle": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "totalMined": {
+          "type": "number"
+        },
+        "bonusReward": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "place", "nickname", "cid", "rankTitle", "totalMined", "bonusReward"]
+    },
+    "BonusReport": {
+      "title": "BonusReport",
+      "description": "Bonus nomination report submitted by staff to the Owner",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "nickname": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "cid": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "rankTitle": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "rock": {
+          "type": "number"
+        },
+        "wood": {
+          "type": "number"
+        },
+        "blueFlower": {
+          "type": "number"
+        },
+        "redFlower": {
+          "type": "number"
+        },
+        "pinkFlower": {
+          "type": "number"
+        },
+        "totalMinedItems": {
+          "type": "number"
+        },
+        "requestedAmount": {
+          "type": "number"
+        },
+        "comment": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "nickname",
+        "cid",
+        "rankTitle",
+        "rock",
+        "wood",
+        "blueFlower",
+        "redFlower",
+        "pinkFlower",
+        "totalMinedItems",
+        "requestedAmount",
+        "comment",
+        "createdAt",
+        "status"
+      ]
+    },
+    "AuditLogItem": {
+      "title": "AuditLogItem",
+      "description": "Audit trail record of actions in the portal",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "actorId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "actorName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "actorRole": {
+          "type": "string",
+          "enum": ["owner", "admin", "manager", "hr", "employee"]
+        },
+        "module": {
+          "type": "string",
+          "enum": ["users", "treasury", "fleet", "hall_of_fame", "recruitment", "farm", "profile", "bonus_report"]
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "id",
+        "timestamp",
+        "actorId",
+        "actorName",
+        "actorRole",
+        "module",
+        "action",
+        "details"
+      ]
+    }
+  },
+  "firestore": {
+    "/auth_hashes/{credHash}": {
+      "schema": { "$ref": "#/entities/AuthHashRecord" },
+      "description": "Zero-knowledge SHA-256 credential hash lookup (list is disabled)"
+    },
+    "/staff_profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/StaffProfile" },
+      "description": "Operational staff profiles without PINs, phones, discords, or hashes"
+    },
+    "/staff_secrets/{secretId}": {
+      "schema": { "$ref": "#/entities/StaffSecret" },
+      "description": "Isolated PII and PIN vault keyed by Owner secret token (list is disabled)"
+    },
+    "/corp_state/{stateId}": {
+      "schema": { "$ref": "#/entities/CorpState" },
+      "description": "Global corporation financials and analytics state"
+    },
+    "/fleet/{vehicleId}": {
+      "schema": { "$ref": "#/entities/VehicleItem" },
+      "description": "Corporation vehicle fleet items"
+    },
+    "/hall_of_fame/{entryId}": {
+      "schema": { "$ref": "#/entities/HallOfFameEntry" },
+      "description": "Hall of Fame monthly winners"
+    },
+    "/bonus_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/BonusReport" },
+      "description": "Staff bonus nomination reports for the Owner"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLogItem" },
+      "description": "Immutable audit log entries"
+    }
+  }
+}

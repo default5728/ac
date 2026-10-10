@@ -1,0 +1,1566 @@
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import {
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+} from 'firebase/firestore';
+import {
+  db,
+  handleFirestoreError,
+  OperationType,
+  computeCredentialHash,
+  computeSecretVaultId,
+  ROOT_OWNER_HASH,
+} from '../lib/firebase';
+import {
+  UserProfile,
+  UserRole,
+  VehicleItem,
+  HallOfFameEntry,
+  CorporationFinancials,
+  AuditLogItem,
+  AppNotification,
+  FarmStats,
+  RESOURCE_PRICES,
+  ROLE_DEFINITIONS,
+  ShiftStatus,
+  VehicleStatus,
+  BonusReport,
+  BonusReportStatus,
+} from '../types/database';
+import {
+  INITIAL_USERS,
+  INITIAL_FLEET,
+  INITIAL_HALL_OF_FAME,
+  INITIAL_FINANCIALS,
+  INITIAL_AUDIT_LOGS,
+  INITIAL_NOTIFICATIONS,
+  INITIAL_BONUS_REPORTS,
+} from '../store/initialData';
+
+interface LoginCredentials {
+  displayName: string;
+  cid: string;
+  phone: string;
+  discord: string;
+  pin: string;
+}
+
+interface DatabaseContextType {
+  // Collections
+  users: UserProfile[];
+  fleet: VehicleItem[];
+  hallOfFame: HallOfFameEntry[];
+  financials: CorporationFinancials;
+  auditLogs: AuditLogItem[];
+  notifications: AppNotification[];
+  bonusReports: BonusReport[];
+  activeToastIds: string[];
+
+  // Cloud & Session status
+  isCloudConnected: boolean;
+  currentUser: UserProfile | null;
+  currentRole: UserRole | null;
+  lastSyncedAt: Date;
+  syncEventCount: number;
+
+  // Modals & Navigation
+  isArchitectureModalOpen: boolean;
+  openArchitectureModal: () => void;
+  closeArchitectureModal: () => void;
+
+  // Auth (Works across ANY domain: Vercel, Cloudflare, AI Studio without Google popup!)
+  loginWithCredentials: (creds: LoginCredentials) => Promise<{ success: boolean; error?: string }>;
+  createUserByAdmin: (newUserData: {
+    displayName: string;
+    cid: string;
+    phone: string;
+    discord: string;
+    pin: string;
+    role: UserRole;
+    rankNumber?: number;
+    department?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  updateUserCredentialsByOwner: (
+    userId: string,
+    updates: {
+      role?: UserRole;
+      pin?: string;
+      rankNumber?: number;
+      rankName?: string;
+      department?: string;
+      phone?: string;
+      discord?: string;
+      displayName?: string;
+      cid?: string;
+    }
+  ) => Promise<void>;
+  deleteUser: (userId: string) => Promise<void>;
+  logoutStaff: () => void;
+
+  // Staff Farm Management (Owner, Admin, HR ONLY)
+  recordFarmSubmission: (
+    userId: string,
+    items: {
+      rock: number;
+      wood: number;
+      blueFlower: number;
+      redFlower: number;
+      pinkFlower: number;
+    }
+  ) => Promise<void>;
+  updateStaffFarmStats: (
+    userId: string,
+    exactStats: {
+      rock: number;
+      wood: number;
+      blueFlower: number;
+      redFlower: number;
+      pinkFlower: number;
+      walletBalance: number;
+    }
+  ) => Promise<void>;
+
+  // Vehicle & BioNotes Management (Owner & Admin ONLY)
+  updateStaffVehicleAndNotes: (
+    userId: string,
+    updates: {
+      assignedVehicle?: string;
+      bioNotes?: string;
+    }
+  ) => Promise<void>;
+
+  // Bonus Reports (Submitted by any staff, visible & managed by Owner)
+  submitBonusReport: (data: { requestedAmount: number; comment: string }) => Promise<void>;
+  reviewBonusReport: (reportId: string, status: BonusReportStatus, payFromTreasury?: boolean) => Promise<void>;
+  deleteBonusReport: (reportId: string) => Promise<void>;
+
+  // Profile, Analytics, Treasury, Fleet, Hall of Fame
+  updateUserProfile: (userId: string, updates: Partial<UserProfile>) => Promise<void>;
+  updateUserShiftStatus: (userId: string, status: ShiftStatus) => Promise<void>;
+  updateFinancialsData: (updates: Partial<CorporationFinancials>) => Promise<void>;
+  adjustTreasury: (deltaAmount: number, reason: string) => Promise<void>;
+  updateHallOfFameWinner: (entryId: string, updates: Partial<HallOfFameEntry>) => Promise<void>;
+  updateVehicleStatus: (vehicleId: string, status: VehicleStatus, fuelPercent?: number) => Promise<void>;
+  addVehicle: (newVehicle: Omit<VehicleItem, 'id'>) => Promise<void>;
+  deleteVehicle: (vehicleId: string) => Promise<void>;
+
+  // Notifications
+  markNotificationAsRead: (id: string) => void;
+  dismissToast: (id: string) => void;
+  clearAllNotifications: () => void;
+  resetDatabaseToDefault: () => void;
+}
+
+const DatabaseContext = createContext<DatabaseContextType | undefined>(undefined);
+
+const SESSION_KEY = 'apathy_corp_session_v9';
+
+export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
+
+  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [secretsMap, setSecretsMap] = useState<
+    Record<string, { phone: string; discord: string; pin: string; credHash: string }>
+  >({});
+  const [fleet, setFleet] = useState<VehicleItem[]>(INITIAL_FLEET);
+  const [hallOfFame, setHallOfFame] = useState<HallOfFameEntry[]>(INITIAL_HALL_OF_FAME);
+  const [financials, setFinancials] = useState<CorporationFinancials>(INITIAL_FINANCIALS);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(INITIAL_AUDIT_LOGS);
+  const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
+  const [bonusReports, setBonusReports] = useState<BonusReport[]>(INITIAL_BONUS_REPORTS);
+  const [activeToastIds, setActiveToastIds] = useState<string[]>([]);
+
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    try {
+      const saved = sessionStorage.getItem(SESSION_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [isArchitectureModalOpen, setIsArchitectureModalOpen] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date>(new Date());
+  const [syncEventCount, setSyncEventCount] = useState<number>(0);
+
+  const triggerSyncPulse = useCallback(() => {
+    setLastSyncedAt(new Date());
+    setSyncEventCount((prev) => prev + 1);
+  }, []);
+
+  // Save active corporate session in sessionStorage
+  useEffect(() => {
+    try {
+      if (currentUser) {
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify(currentUser));
+      } else {
+        sessionStorage.removeItem(SESSION_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [currentUser]);
+
+  // Helper to convert Firestore StaffProfile doc + optional secret into UserProfile
+  const mapDocToUserProfile = useCallback(
+    (
+      data: Record<string, unknown>,
+      secret?: { phone: string; discord: string; pin: string }
+    ): UserProfile => {
+      return {
+        id: String(data.id || ''),
+        username: String(data.username || ''),
+        displayName: String(data.displayName || ''),
+        pin: secret?.pin || '••••',
+        role: (data.role as UserRole) || 'employee',
+        cid: String(data.cid || ''),
+        rankNumber: Number(data.rankNumber) || 4,
+        rankName: String(data.rankName || 'Сотрудник'),
+        phone: secret?.phone || 'Скрыто (Защита БД)',
+        discord: secret?.discord || 'Скрыто (Защита БД)',
+        department: String(data.department || 'Цех добычи'),
+        walletBalance: Number(data.walletBalance) || 0,
+        farmStats: {
+          rock: Number(data.rock) || 0,
+          wood: Number(data.wood) || 0,
+          blueFlower: Number(data.blueFlower) || 0,
+          redFlower: Number(data.redFlower) || 0,
+          pinkFlower: Number(data.pinkFlower) || 0,
+          totalEarned: Number(data.totalEarned) || 0,
+        },
+        assignedVehicle: String(data.assignedVehicle || '-'),
+        status: (data.status as ShiftStatus) || 'off_duty',
+        bioNotes: String(data.bioNotes || ''),
+        joinedAt: String(data.joinedAt || ''),
+        lastActive: String(data.lastActive || 'Онлайн'),
+      };
+    },
+    []
+  );
+
+  // Ensure initial root owner and state are seeded in Firestore on boot
+  useEffect(() => {
+    let mounted = true;
+    async function seedIfNeeded() {
+      try {
+        const rootHashRef = doc(db, 'auth_hashes', ROOT_OWNER_HASH);
+        const rootHashSnap = await getDoc(rootHashRef);
+
+        if (!rootHashSnap.exists()) {
+          // 1. Seed root owner hash in /auth_hashes ( triggers isRootOwnerSeeded() in rules )
+          await setDoc(rootHashRef, {
+            id: ROOT_OWNER_HASH,
+            profileId: 'u-owner-root',
+            role: 'owner',
+          });
+
+          // 2. Seed /staff_profiles/u-owner-root (NO PIN, NO PHONE, NO DISCORD)
+          const rootOwner = INITIAL_USERS[0];
+          await setDoc(doc(db, 'staff_profiles', rootOwner.id), {
+            id: rootOwner.id,
+            username: rootOwner.username,
+            displayName: rootOwner.displayName,
+            role: rootOwner.role,
+            cid: rootOwner.cid,
+            rankNumber: rootOwner.rankNumber,
+            rankName: rootOwner.rankName,
+            department: rootOwner.department,
+            walletBalance: rootOwner.walletBalance,
+            rock: rootOwner.farmStats.rock,
+            wood: rootOwner.farmStats.wood,
+            blueFlower: rootOwner.farmStats.blueFlower,
+            redFlower: rootOwner.farmStats.redFlower,
+            pinkFlower: rootOwner.farmStats.pinkFlower,
+            totalEarned: rootOwner.farmStats.totalEarned,
+            assignedVehicle: rootOwner.assignedVehicle,
+            status: rootOwner.status,
+            bioNotes: rootOwner.bioNotes,
+            joinedAt: rootOwner.joinedAt,
+            lastActive: 'Онлайн',
+          });
+
+          // 3. Seed isolated secret in /staff_secrets/{vaultId}
+          const vaultId = computeSecretVaultId(rootOwner.id);
+          await setDoc(doc(db, 'staff_secrets', vaultId), {
+            id: vaultId,
+            profileId: rootOwner.id,
+            phone: rootOwner.phone,
+            discord: rootOwner.discord,
+            pin: rootOwner.pin,
+            credHash: ROOT_OWNER_HASH,
+          });
+
+          // 4. Seed /corp_state/main
+          await setDoc(doc(db, 'corp_state', 'main'), {
+            treasuryBalance: INITIAL_FINANCIALS.treasuryBalance,
+            weeklyGain: INITIAL_FINANCIALS.weeklyGain,
+            rock: INITIAL_FINANCIALS.totalMined.rock,
+            wood: INITIAL_FINANCIALS.totalMined.wood,
+            blueFlower: INITIAL_FINANCIALS.totalMined.blueFlower,
+            redFlower: INITIAL_FINANCIALS.totalMined.redFlower,
+            pinkFlower: INITIAL_FINANCIALS.totalMined.pinkFlower,
+            totalEarned: INITIAL_FINANCIALS.totalMined.totalEarned,
+            activeWorkersCount: 1,
+            radioFrequency: INITIAL_FINANCIALS.radioFrequency,
+          });
+
+          // 5. Seed /hall_of_fame
+          for (const h of INITIAL_HALL_OF_FAME) {
+            await setDoc(doc(db, 'hall_of_fame', h.id), {
+              id: h.id,
+              place: h.place,
+              nickname: h.nickname,
+              cid: h.cid,
+              rankTitle: h.rankTitle,
+              totalMined: h.totalMined,
+              bonusReward: h.bonusReward,
+            });
+          }
+        }
+        if (mounted) {
+          setIsCloudConnected(true);
+        }
+      } catch (err) {
+        console.warn('Seed check:', err);
+      }
+    }
+    seedIfNeeded();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Real-time Firestore listeners (active across all domains: Vercel, Cloudflare, AI Studio)
+  useEffect(() => {
+    // 1. Listen to /staff_profiles
+    const qProfiles = query(collection(db, 'staff_profiles'), where('rankNumber', '>=', 1));
+    const unsubProfiles = onSnapshot(
+      qProfiles,
+      (snap) => {
+        setIsCloudConnected(true);
+        const docsData = snap.docs.map((d) => d.data());
+        if (docsData.length > 0) {
+          setUsers((prevUsers) => {
+            return docsData.map((d) => {
+              const id = String(d.id);
+              const existingUser = prevUsers.find((p) => p.id === id);
+              const sec =
+                secretsMap[id] ||
+                (existingUser && existingUser.phone !== 'Скрыто (Защита БД)'
+                  ? {
+                      phone: existingUser.phone,
+                      discord: existingUser.discord,
+                      pin: existingUser.pin,
+                    }
+                  : undefined);
+              return mapDocToUserProfile(d, sec);
+            });
+          });
+          triggerSyncPulse();
+        }
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'staff_profiles');
+      }
+    );
+
+    // 2. Listen to /corp_state/main
+    const unsubCorpState = onSnapshot(
+      doc(db, 'corp_state', 'main'),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const d = docSnap.data();
+          setFinancials({
+            treasuryBalance: Number(d.treasuryBalance) || 0,
+            weeklyGain: Number(d.weeklyGain) || 0,
+            totalMined: {
+              rock: Number(d.rock) || 0,
+              wood: Number(d.wood) || 0,
+              blueFlower: Number(d.blueFlower) || 0,
+              redFlower: Number(d.redFlower) || 0,
+              pinkFlower: Number(d.pinkFlower) || 0,
+              totalEarned: Number(d.totalEarned) || 0,
+            },
+            activeWorkersCount: Number(d.activeWorkersCount) || 0,
+            radioFrequency: String(d.radioFrequency || '104.2 MHz'),
+          });
+          triggerSyncPulse();
+        }
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.GET, 'corp_state/main');
+      }
+    );
+
+    // 3. Listen to /fleet
+    const qFleet = query(collection(db, 'fleet'), where('trunkKg', '>=', 0));
+    const unsubFleet = onSnapshot(
+      qFleet,
+      (snap) => {
+        const items: VehicleItem[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: String(data.id),
+            modelName: String(data.modelName),
+            category: String(data.category),
+            trunkKg: Number(data.trunkKg) || 0,
+            rankRequired: String(data.rankRequired),
+            slot: String(data.slot),
+            status: data.status as VehicleStatus,
+            fuelPercent: Number(data.fuelPercent) || 100,
+            plate: String(data.plate),
+          };
+        });
+        setFleet(items);
+        triggerSyncPulse();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'fleet');
+      }
+    );
+
+    // 4. Listen to /hall_of_fame
+    const qHof = query(collection(db, 'hall_of_fame'), where('place', '>=', 1));
+    const unsubHof = onSnapshot(
+      qHof,
+      (snap) => {
+        if (!snap.empty) {
+          const items: HallOfFameEntry[] = snap.docs
+            .map((d) => {
+              const data = d.data();
+              return {
+                id: String(data.id),
+                place: (Number(data.place) as 1 | 2 | 3) || 1,
+                nickname: String(data.nickname || 'none'),
+                cid: String(data.cid || '-'),
+                rankTitle: String(data.rankTitle || '-'),
+                totalMined: Number(data.totalMined) || 0,
+                bonusReward: Number(data.bonusReward) || 0,
+              };
+            })
+            .sort((a, b) => a.place - b.place);
+          setHallOfFame(items);
+          triggerSyncPulse();
+        }
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'hall_of_fame');
+      }
+    );
+
+    // 5. Listen to /bonus_reports
+    const qReports = query(collection(db, 'bonus_reports'), where('requestedAmount', '>=', 0));
+    const unsubReports = onSnapshot(
+      qReports,
+      (snap) => {
+        const items: BonusReport[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: String(data.id),
+              userId: String(data.userId),
+              nickname: String(data.nickname),
+              cid: String(data.cid),
+              rankTitle: String(data.rankTitle),
+              farmSnapshot: {
+                rock: Number(data.rock) || 0,
+                wood: Number(data.wood) || 0,
+                blueFlower: Number(data.blueFlower) || 0,
+                redFlower: Number(data.redFlower) || 0,
+                pinkFlower: Number(data.pinkFlower) || 0,
+                totalMinedItems: Number(data.totalMinedItems) || 0,
+              },
+              requestedAmount: Number(data.requestedAmount) || 0,
+              comment: String(data.comment || ''),
+              createdAt: String(data.createdAt || ''),
+              status: (data.status as BonusReportStatus) || 'pending',
+            };
+          })
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setBonusReports(items);
+        triggerSyncPulse();
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'bonus_reports');
+      }
+    );
+
+    // 6. Listen to /audit_logs
+    const qLogs = query(collection(db, 'audit_logs'), where('timestamp', '>=', '0'));
+    const unsubLogs = onSnapshot(
+      qLogs,
+      (snap) => {
+        const items: AuditLogItem[] = snap.docs
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: String(data.id),
+              timestamp: String(data.timestamp),
+              actorId: String(data.actorId),
+              actorName: String(data.actorName),
+              actorRole: (data.actorRole as UserRole) || 'employee',
+              module: data.module as AuditLogItem['module'],
+              action: String(data.action),
+              details: String(data.details),
+            };
+          })
+          .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+        setAuditLogs(items);
+      },
+      (err) => {
+        handleFirestoreError(err, OperationType.LIST, 'audit_logs');
+      }
+    );
+
+    return () => {
+      unsubProfiles();
+      unsubCorpState();
+      unsubFleet();
+      unsubHof();
+      unsubReports();
+      unsubLogs();
+    };
+  }, [mapDocToUserProfile, secretsMap, triggerSyncPulse]);
+
+  // Keep currentUser synced with live updates from `users`
+  useEffect(() => {
+    if (!currentUser) return;
+    const updated = users.find((u) => u.id === currentUser.id);
+    if (updated) {
+      setCurrentUser((prev) => {
+        if (!prev) return null;
+        return {
+          ...updated,
+          phone: updated.phone !== 'Скрыто (Защита БД)' ? updated.phone : prev.phone,
+          discord: updated.discord !== 'Скрыто (Защита БД)' ? updated.discord : prev.discord,
+          pin: updated.pin !== '••••' ? updated.pin : prev.pin,
+        };
+      });
+    }
+  }, [users, currentUser?.id]);
+
+  // Load isolated secrets by computed vault ID ONLY when logged in as Owner or Admin
+  useEffect(() => {
+    if (!currentUser) return;
+    if (currentUser.role !== 'owner' && currentUser.role !== 'admin') return;
+
+    let cancelled = false;
+    async function loadSecretsForAdmin() {
+      const nextMap: Record<
+        string,
+        { phone: string; discord: string; pin: string; credHash: string }
+      > = {};
+      for (const u of users) {
+        try {
+          const vaultId = computeSecretVaultId(u.id);
+          const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
+          if (secSnap.exists()) {
+            const sd = secSnap.data();
+            nextMap[u.id] = {
+              phone: String(sd.phone || ''),
+              discord: String(sd.discord || ''),
+              pin: String(sd.pin || ''),
+              credHash: String(sd.credHash || ''),
+            };
+          }
+        } catch {
+          // ignore if not found
+        }
+      }
+      if (!cancelled && Object.keys(nextMap).length > 0) {
+        setSecretsMap((prev) => ({ ...prev, ...nextMap }));
+        setUsers((prev) =>
+          prev.map((u) =>
+            nextMap[u.id]
+              ? {
+                  ...u,
+                  phone: nextMap[u.id].phone,
+                  discord: nextMap[u.id].discord,
+                  pin: nextMap[u.id].pin,
+                }
+              : u
+          )
+        );
+      }
+    }
+    loadSecretsForAdmin();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.role, users.length]);
+
+  const addNotification = useCallback(
+    (title: string, message: string, type: AppNotification['type'] = 'info') => {
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const notifId = `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const newNotif: AppNotification = {
+        id: notifId,
+        timestamp: timeStr,
+        title,
+        message,
+        type,
+        read: false,
+        actorName: currentUser?.displayName,
+      };
+
+      setNotifications((prev) => [newNotif, ...prev.slice(0, 99)]);
+      setActiveToastIds((prev) => [...prev, notifId]);
+
+      setTimeout(() => {
+        setActiveToastIds((prev) => prev.filter((id) => id !== notifId));
+      }, 5000);
+    },
+    [currentUser?.displayName]
+  );
+
+  const addAuditLog = useCallback(
+    async (
+      module: AuditLogItem['module'],
+      action: string,
+      details: string,
+      actorOverride?: { id: string; name: string; role: UserRole }
+    ) => {
+      const now = new Date();
+      const timeStr = now.toISOString().replace('T', ' ').slice(0, 19);
+      const logId = `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const actorId = actorOverride?.id || currentUser?.id || 'u-owner-root';
+      const actorName = actorOverride?.name || currentUser?.displayName || 'Система';
+      const actorRole = actorOverride?.role || currentUser?.role || 'employee';
+
+      try {
+        await setDoc(doc(db, 'audit_logs', logId), {
+          id: logId,
+          timestamp: timeStr.slice(0, 64),
+          actorId: actorId.slice(0, 128),
+          actorName: actorName.slice(0, 64),
+          actorRole,
+          module,
+          action: action.slice(0, 120),
+          details: details.slice(0, 500),
+        });
+      } catch (err) {
+        console.warn('Audit log write skipped:', err);
+      }
+    },
+    [currentUser]
+  );
+
+  const dismissToast = (id: string) => {
+    setActiveToastIds((prev) => prev.filter((item) => item !== id));
+  };
+
+  // Zero-knowledge login via /auth_hashes/{credHash} (no Google popup needed, works on Vercel/Cloudflare/anywhere!)
+  const loginWithCredentials = async (creds: LoginCredentials) => {
+    try {
+      const inputHash = computeCredentialHash(
+        creds.displayName,
+        creds.cid,
+        creds.phone,
+        creds.discord,
+        creds.pin
+      );
+
+      // Direct point lookup in /auth_hashes/{inputHash} (list is disabled on server!)
+      const hashSnap = await getDoc(doc(db, 'auth_hashes', inputHash));
+      if (!hashSnap.exists()) {
+        return {
+          success: false,
+          error:
+            'Ошибка авторизации: неверные реквизиты (Ник, CID, Телефон, Discord или PIN). Вход разрешён исключительно по данным, зарегистрированным Владельцем.',
+        };
+      }
+
+      const hashData = hashSnap.data();
+      const profileId = String(hashData.profileId);
+
+      const profileSnap = await getDoc(doc(db, 'staff_profiles', profileId));
+      if (!profileSnap.exists()) {
+        return {
+          success: false,
+          error: 'Профиль сотрудника не найден в базе данных.',
+        };
+      }
+
+      const profileData = profileSnap.data();
+      const loggedInUser = mapDocToUserProfile(profileData, {
+        phone: creds.phone.trim(),
+        discord: creds.discord.trim(),
+        pin: creds.pin.trim(),
+      });
+
+      // Update lastActive in Firestore
+      try {
+        await updateDoc(doc(db, 'staff_profiles', profileId), {
+          lastActive: 'Онлайн',
+        });
+      } catch {
+        // non-blocking
+      }
+
+      setCurrentUser({ ...loggedInUser, lastActive: 'Онлайн' });
+      addNotification(
+        'Успешный вход (Cloud Sync)',
+        `Сотрудник ${loggedInUser.displayName} авторизован. Роль: ${ROLE_DEFINITIONS[loggedInUser.role].title}`,
+        'success'
+      );
+      await addAuditLog(
+        'users',
+        'Вход в систему',
+        `${loggedInUser.displayName} [${loggedInUser.cid}] вошел в портал`,
+        { id: loggedInUser.id, name: loggedInUser.displayName, role: loggedInUser.role }
+      );
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? `Ошибка подключения к облачной БД: ${error.message}`
+            : 'Ошибка авторизации.',
+      };
+    }
+  };
+
+  // Registration: ONLY by Owner
+  const createUserByAdmin = async (newUserData: {
+    displayName: string;
+    cid: string;
+    phone: string;
+    discord: string;
+    pin: string;
+    role: UserRole;
+    rankNumber?: number;
+    department?: string;
+  }) => {
+    if (currentUser?.role !== 'owner') {
+      return { success: false, error: 'Только Владелец корпорации может регистрировать новые учетные записи!' };
+    }
+
+    const nickClean = newUserData.displayName.trim().slice(0, 64);
+    const cidClean = newUserData.cid.trim().toUpperCase().slice(0, 32);
+    const phoneClean = newUserData.phone.trim().slice(0, 64);
+    const discordClean = newUserData.discord.trim().slice(0, 64);
+    const pinClean = newUserData.pin.trim().slice(0, 32);
+
+    if (!nickClean || !cidClean || !phoneClean || !discordClean || !pinClean) {
+      return {
+        success: false,
+        error: 'Все 5 полей (Ник, CID, Телефон, Discord, PIN) обязательны для регистрации сотрудника!',
+      };
+    }
+
+    const exists = users.some(
+      (u) =>
+        u.displayName.toLowerCase() === nickClean.toLowerCase() ||
+        u.cid.toLowerCase() === cidClean.toLowerCase()
+    );
+    if (exists) {
+      return { success: false, error: 'Сотрудник с таким NickName или CID уже существует в базе!' };
+    }
+
+    const roleRankMap: Record<UserRole, { num: number; name: string }> = {
+      owner: { num: 10, name: 'Владелец / Лидер' },
+      admin: { num: 9, name: 'Администратор / Зам' },
+      manager: { num: 6, name: 'Менеджер / Логист' },
+      hr: { num: 5, name: 'Отдел кадров (HR)' },
+      employee: { num: 4, name: 'Сотрудник / Фармер' },
+    };
+
+    const rankInfo = roleRankMap[newUserData.role] || { num: 4, name: 'Сотрудник' };
+    const newId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const credHash = computeCredentialHash(nickClean, cidClean, phoneClean, discordClean, pinClean);
+    const vaultId = computeSecretVaultId(newId);
+    const joinedAt = new Date().toISOString().slice(0, 10);
+    const dept = (newUserData.department || (newUserData.role === 'employee' ? 'Цех добычи' : 'Руководство')).slice(0, 64);
+
+    try {
+      // 1. Write zero-knowledge lookup record in /auth_hashes/{credHash}
+      await setDoc(doc(db, 'auth_hashes', credHash), {
+        id: credHash,
+        profileId: newId,
+        role: newUserData.role,
+      });
+
+      // 2. Write operational profile in /staff_profiles/{newId} (NO PIN, NO PHONE, NO DISCORD, NO HASH)
+      await setDoc(doc(db, 'staff_profiles', newId), {
+        id: newId,
+        username: nickClean.toLowerCase().replace(/\s+/g, '_').slice(0, 64),
+        displayName: nickClean,
+        role: newUserData.role,
+        cid: cidClean,
+        rankNumber: Math.min(10, Math.max(1, newUserData.rankNumber || rankInfo.num)),
+        rankName: rankInfo.name,
+        department: dept,
+        walletBalance: 0,
+        rock: 0,
+        wood: 0,
+        blueFlower: 0,
+        redFlower: 0,
+        pinkFlower: 0,
+        totalEarned: 0,
+        assignedVehicle: '-',
+        status: 'off_duty',
+        bioNotes: 'Сотрудник зарегистрирован Владельцем корпорации APATHY.',
+        joinedAt,
+        lastActive: 'Не входил',
+      });
+
+      // 3. Write isolated PII & PIN in /staff_secrets/{vaultId}
+      await setDoc(doc(db, 'staff_secrets', vaultId), {
+        id: vaultId,
+        profileId: newId,
+        phone: phoneClean,
+        discord: discordClean,
+        pin: pinClean,
+        credHash,
+      });
+
+      setSecretsMap((prev) => ({
+        ...prev,
+        [newId]: { phone: phoneClean, discord: discordClean, pin: pinClean, credHash },
+      }));
+
+      addNotification(
+        'Сотрудник создан в облаке',
+        `Владелец зарегистрировал сотрудника ${nickClean} [${ROLE_DEFINITIONS[newUserData.role].title}]`,
+        'success'
+      );
+      await addAuditLog(
+        'users',
+        'Создание учетной записи',
+        `Владелец создал профиль ${nickClean} (CID: ${cidClean}, Роль: ${newUserData.role})`
+      );
+
+      return { success: true };
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `staff_profiles/${newId}`);
+      return { success: false, error: 'Ошибка сохранения в облачную БД.' };
+    }
+  };
+
+  const updateUserCredentialsByOwner = async (
+    userId: string,
+    updates: {
+      role?: UserRole;
+      pin?: string;
+      rankNumber?: number;
+      rankName?: string;
+      department?: string;
+      phone?: string;
+      discord?: string;
+      displayName?: string;
+      cid?: string;
+    }
+  ) => {
+    if (currentUser?.role !== 'owner') return;
+    const target = users.find((u) => u.id === userId);
+    if (!target) return;
+
+    const vaultId = computeSecretVaultId(userId);
+    let currentSec = secretsMap[userId];
+    if (!currentSec) {
+      const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
+      if (secSnap.exists()) {
+        const sd = secSnap.data();
+        currentSec = {
+          phone: String(sd.phone || ''),
+          discord: String(sd.discord || ''),
+          pin: String(sd.pin || ''),
+          credHash: String(sd.credHash || ''),
+        };
+      } else {
+        currentSec = {
+          phone: target.phone,
+          discord: target.discord,
+          pin: target.pin,
+          credHash: computeCredentialHash(
+            target.displayName,
+            target.cid,
+            target.phone,
+            target.discord,
+            target.pin
+          ),
+        };
+      }
+    }
+
+    const nextDisplayName = (updates.displayName ?? target.displayName).trim().slice(0, 64);
+    const nextCid = (updates.cid ?? target.cid).trim().toUpperCase().slice(0, 32);
+    const nextPhone = (updates.phone ?? currentSec.phone).trim().slice(0, 64);
+    const nextDiscord = (updates.discord ?? currentSec.discord).trim().slice(0, 64);
+    const nextPin = (updates.pin ?? currentSec.pin).trim().slice(0, 32);
+    const nextRole = updates.role ?? target.role;
+    const nextRankNumber = Math.min(10, Math.max(1, updates.rankNumber ?? target.rankNumber));
+    const nextRankName = (updates.rankName ?? target.rankName).slice(0, 64);
+    const nextDepartment = (updates.department ?? target.department).slice(0, 64);
+
+    const nextCredHash = computeCredentialHash(
+      nextDisplayName,
+      nextCid,
+      nextPhone,
+      nextDiscord,
+      nextPin
+    );
+
+    try {
+      // If hash changed, remove old hash and create new hash in /auth_hashes
+      if (currentSec.credHash && currentSec.credHash !== nextCredHash) {
+        try {
+          await deleteDoc(doc(db, 'auth_hashes', currentSec.credHash));
+        } catch {
+          // ignore if old hash didn't exist
+        }
+      }
+      await setDoc(doc(db, 'auth_hashes', nextCredHash), {
+        id: nextCredHash,
+        profileId: target.id,
+        role: nextRole,
+      });
+
+      await setDoc(doc(db, 'staff_profiles', userId), {
+        id: target.id,
+        username: target.username,
+        displayName: nextDisplayName,
+        role: nextRole,
+        cid: nextCid,
+        rankNumber: nextRankNumber,
+        rankName: nextRankName,
+        department: nextDepartment,
+        walletBalance: target.walletBalance,
+        rock: target.farmStats.rock,
+        wood: target.farmStats.wood,
+        blueFlower: target.farmStats.blueFlower,
+        redFlower: target.farmStats.redFlower,
+        pinkFlower: target.farmStats.pinkFlower,
+        totalEarned: target.farmStats.totalEarned,
+        assignedVehicle: target.assignedVehicle || '-',
+        status: target.status,
+        bioNotes: target.bioNotes || '',
+        joinedAt: target.joinedAt,
+        lastActive: target.lastActive,
+      });
+
+      await setDoc(doc(db, 'staff_secrets', vaultId), {
+        id: vaultId,
+        profileId: target.id,
+        phone: nextPhone,
+        discord: nextDiscord,
+        pin: nextPin,
+        credHash: nextCredHash,
+      });
+
+      setSecretsMap((prev) => ({
+        ...prev,
+        [userId]: { phone: nextPhone, discord: nextDiscord, pin: nextPin, credHash: nextCredHash },
+      }));
+
+      await addAuditLog(
+        'users',
+        'Изменение профиля сотрудника',
+        `Владелец изменил параметры ${target.displayName}: ${Object.keys(updates).join(', ')}`
+      );
+      addNotification('Профиль обновлен', `Владелец обновил данные сотрудника ${target.displayName}`, 'info');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const deleteUser = async (userId: string) => {
+    const target = users.find((u) => u.id === userId);
+    if (!target || target.role === 'owner') return;
+
+    const vaultId = computeSecretVaultId(userId);
+    const sec = secretsMap[userId];
+
+    try {
+      if (sec?.credHash) {
+        await deleteDoc(doc(db, 'auth_hashes', sec.credHash));
+      }
+      await deleteDoc(doc(db, 'staff_profiles', userId));
+      await deleteDoc(doc(db, 'staff_secrets', vaultId));
+      await addAuditLog('users', 'Удаление сотрудника', `Удален профиль ${target.displayName} [${target.cid}]`);
+      addNotification('Сотрудник удален', `Учетная запись ${target.displayName} удалена из облачной БД.`, 'warning');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const logoutStaff = () => {
+    if (currentUser) {
+      addAuditLog('users', 'Выход из системы', `${currentUser.displayName} вышел из сессии`);
+    }
+    setCurrentUser(null);
+  };
+
+  const saveFullStaffProfileDoc = async (u: UserProfile) => {
+    await setDoc(doc(db, 'staff_profiles', u.id), {
+      id: u.id,
+      username: u.username.slice(0, 64),
+      displayName: u.displayName.slice(0, 64),
+      role: u.role,
+      cid: u.cid.slice(0, 32),
+      rankNumber: u.rankNumber,
+      rankName: u.rankName.slice(0, 64),
+      department: u.department.slice(0, 64),
+      walletBalance: Math.max(0, u.walletBalance),
+      rock: Math.max(0, u.farmStats.rock),
+      wood: Math.max(0, u.farmStats.wood),
+      blueFlower: Math.max(0, u.farmStats.blueFlower),
+      redFlower: Math.max(0, u.farmStats.redFlower),
+      pinkFlower: Math.max(0, u.farmStats.pinkFlower),
+      totalEarned: Math.max(0, u.farmStats.totalEarned),
+      assignedVehicle: (u.assignedVehicle || '-').slice(0, 120),
+      status: u.status,
+      bioNotes: (u.bioNotes || '').slice(0, 500),
+      joinedAt: u.joinedAt.slice(0, 32),
+      lastActive: u.lastActive.slice(0, 64),
+    });
+  };
+
+  const saveFullCorpStateDoc = async (fin: CorporationFinancials) => {
+    await setDoc(doc(db, 'corp_state', 'main'), {
+      treasuryBalance: Math.max(0, fin.treasuryBalance),
+      weeklyGain: Math.max(0, fin.weeklyGain),
+      rock: Math.max(0, fin.totalMined.rock),
+      wood: Math.max(0, fin.totalMined.wood),
+      blueFlower: Math.max(0, fin.totalMined.blueFlower),
+      redFlower: Math.max(0, fin.totalMined.redFlower),
+      pinkFlower: Math.max(0, fin.totalMined.pinkFlower),
+      totalEarned: Math.max(0, fin.totalMined.totalEarned),
+      activeWorkersCount: Math.max(0, fin.activeWorkersCount),
+      radioFrequency: (fin.radioFrequency || '104.2 MHz').slice(0, 64),
+    });
+  };
+
+  const recordFarmSubmission = async (
+    userId: string,
+    items: {
+      rock: number;
+      wood: number;
+      blueFlower: number;
+      redFlower: number;
+      pinkFlower: number;
+    }
+  ) => {
+    if (!currentUser) return;
+    if (!ROLE_DEFINITIONS[currentUser.role].permissions.canEditStaffFarm) return;
+
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return;
+
+    const grandTotal =
+      items.rock * RESOURCE_PRICES.rock +
+      items.wood * RESOURCE_PRICES.wood +
+      items.blueFlower * RESOURCE_PRICES.blueFlower +
+      items.redFlower * RESOURCE_PRICES.redFlower +
+      items.pinkFlower * RESOURCE_PRICES.pinkFlower;
+
+    if (grandTotal <= 0) return;
+
+    const driverCut = grandTotal * 0.5;
+    const treasuryCut = grandTotal * 0.5;
+
+    const updatedUser: UserProfile = {
+      ...targetUser,
+      walletBalance: targetUser.walletBalance + driverCut,
+      farmStats: {
+        rock: targetUser.farmStats.rock + items.rock,
+        wood: targetUser.farmStats.wood + items.wood,
+        blueFlower: targetUser.farmStats.blueFlower + items.blueFlower,
+        redFlower: targetUser.farmStats.redFlower + items.redFlower,
+        pinkFlower: targetUser.farmStats.pinkFlower + items.pinkFlower,
+        totalEarned: targetUser.farmStats.totalEarned + driverCut,
+      },
+    };
+
+    const updatedFin: CorporationFinancials = {
+      ...financials,
+      treasuryBalance: financials.treasuryBalance + treasuryCut,
+      weeklyGain: financials.weeklyGain + treasuryCut,
+      totalMined: {
+        rock: financials.totalMined.rock + items.rock,
+        wood: financials.totalMined.wood + items.wood,
+        blueFlower: financials.totalMined.blueFlower + items.blueFlower,
+        redFlower: financials.totalMined.redFlower + items.redFlower,
+        pinkFlower: financials.totalMined.pinkFlower + items.pinkFlower,
+        totalEarned: financials.totalMined.totalEarned + grandTotal,
+      },
+    };
+
+    try {
+      await saveFullStaffProfileDoc(updatedUser);
+      await saveFullCorpStateDoc(updatedFin);
+
+      await addAuditLog(
+        'farm',
+        'Начисление добычи (50/50)',
+        `${targetUser.displayName}: начислено [Порода: ${items.rock}, Дерево: ${items.wood}, Цветы: ${items.blueFlower + items.redFlower + items.pinkFlower}]. Сотруднику: +$${driverCut.toLocaleString()}, в казну: +$${treasuryCut.toLocaleString()}`
+      );
+      addNotification(
+        'Добыча начислена (50/50)',
+        `${targetUser.displayName} получил +$${driverCut.toLocaleString()} (50%), в казну +$${treasuryCut.toLocaleString()} (50%)`,
+        'success'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const updateStaffFarmStats = async (
+    userId: string,
+    exactStats: {
+      rock: number;
+      wood: number;
+      blueFlower: number;
+      redFlower: number;
+      pinkFlower: number;
+      walletBalance: number;
+    }
+  ) => {
+    if (!currentUser) return;
+    if (!ROLE_DEFINITIONS[currentUser.role].permissions.canEditStaffFarm) return;
+
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return;
+
+    const newFarmStats: FarmStats = {
+      rock: Math.max(0, exactStats.rock),
+      wood: Math.max(0, exactStats.wood),
+      blueFlower: Math.max(0, exactStats.blueFlower),
+      redFlower: Math.max(0, exactStats.redFlower),
+      pinkFlower: Math.max(0, exactStats.pinkFlower),
+      totalEarned: Math.max(0, exactStats.walletBalance),
+    };
+
+    const updatedUser: UserProfile = {
+      ...targetUser,
+      walletBalance: Math.max(0, exactStats.walletBalance),
+      farmStats: newFarmStats,
+    };
+
+    try {
+      await saveFullStaffProfileDoc(updatedUser);
+      await addAuditLog(
+        'farm',
+        'Корректировка добычи сотрудника',
+        `${currentUser.displayName} изменил добычу ${targetUser.displayName}: Порода=${newFarmStats.rock}, Дерево=${newFarmStats.wood}, Цветы=${newFarmStats.blueFlower + newFarmStats.redFlower + newFarmStats.pinkFlower}, Баланс=$${exactStats.walletBalance.toLocaleString()}`
+      );
+      addNotification(
+        'Добыча обновлена',
+        `Обновлены показатели добычи для сотрудника ${targetUser.displayName}`,
+        'info'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const updateStaffVehicleAndNotes = async (
+    userId: string,
+    updates: {
+      assignedVehicle?: string;
+      bioNotes?: string;
+    }
+  ) => {
+    if (!currentUser) return;
+    if (!ROLE_DEFINITIONS[currentUser.role].permissions.canEditStaffVehicleAndNotes) return;
+
+    const targetUser = users.find((u) => u.id === userId);
+    if (!targetUser) return;
+
+    const updatedUser: UserProfile = {
+      ...targetUser,
+      ...(updates.assignedVehicle !== undefined ? { assignedVehicle: updates.assignedVehicle } : {}),
+      ...(updates.bioNotes !== undefined ? { bioNotes: updates.bioNotes } : {}),
+    };
+
+    try {
+      await saveFullStaffProfileDoc(updatedUser);
+      await addAuditLog(
+        'profile',
+        'Закрепление транспорта / заметок',
+        `${currentUser.displayName} обновил у ${targetUser.displayName}: ${
+          updates.assignedVehicle !== undefined ? `Транспорт: ${updates.assignedVehicle} ` : ''
+        }${updates.bioNotes !== undefined ? `Заметки обновлены` : ''}`
+      );
+      addNotification(
+        'Данные сотрудника обновлены',
+        `Обновлен транспорт/заметки для ${targetUser.displayName}`,
+        'info'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const submitBonusReport = async (data: { requestedAmount: number; comment: string }) => {
+    if (!currentUser) return;
+    const now = new Date();
+    const timeStr = now.toISOString().replace('T', ' ').slice(0, 16);
+    const reportId = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const rock = currentUser.farmStats?.rock || 0;
+    const wood = currentUser.farmStats?.wood || 0;
+    const blueFlower = currentUser.farmStats?.blueFlower || 0;
+    const redFlower = currentUser.farmStats?.redFlower || 0;
+    const pinkFlower = currentUser.farmStats?.pinkFlower || 0;
+    const totalMinedItems = rock + wood + blueFlower + redFlower + pinkFlower;
+    const reqAmount = Math.max(0, data.requestedAmount);
+    const commentClean = (data.comment.trim() || 'Прошу рассмотреть мою выработку для премирования.').slice(0, 500);
+
+    try {
+      await setDoc(doc(db, 'bonus_reports', reportId), {
+        id: reportId,
+        userId: currentUser.id,
+        nickname: currentUser.displayName.slice(0, 64),
+        cid: currentUser.cid.slice(0, 32),
+        rankTitle: `[${String(currentUser.rankNumber).padStart(2, '0')}] ${currentUser.rankName}`.slice(0, 64),
+        rock,
+        wood,
+        blueFlower,
+        redFlower,
+        pinkFlower,
+        totalMinedItems,
+        requestedAmount: reqAmount,
+        comment: commentClean,
+        createdAt: timeStr,
+        status: 'pending',
+      });
+
+      await addAuditLog(
+        'bonus_report',
+        'Подан рапорт на премию',
+        `${currentUser.displayName} [${currentUser.cid}] подал рапорт на сумму $${reqAmount.toLocaleString()} (Сдано: ${totalMinedItems} шт.)`
+      );
+      addNotification(
+        'Новый рапорт на премирование',
+        `${currentUser.displayName} (CID: ${currentUser.cid}) подал рапорт Владельцу на премию $${reqAmount.toLocaleString()}`,
+        'info'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `bonus_reports/${reportId}`);
+    }
+  };
+
+  const reviewBonusReport = async (
+    reportId: string,
+    status: BonusReportStatus,
+    payFromTreasury = false
+  ) => {
+    if (currentUser?.role !== 'owner') return;
+    const report = bonusReports.find((r) => r.id === reportId);
+    if (!report) return;
+
+    try {
+      await updateDoc(doc(db, 'bonus_reports', reportId), { status });
+
+      if (status === 'approved' && payFromTreasury && report.requestedAmount > 0) {
+        const targetUser = users.find((u) => u.id === report.userId);
+        if (targetUser) {
+          await saveFullStaffProfileDoc({
+            ...targetUser,
+            walletBalance: targetUser.walletBalance + report.requestedAmount,
+          });
+        }
+        await saveFullCorpStateDoc({
+          ...financials,
+          treasuryBalance: Math.max(0, financials.treasuryBalance - report.requestedAmount),
+        });
+      }
+
+      await addAuditLog(
+        'bonus_report',
+        status === 'approved' ? 'Рапорт на премию одобрен' : 'Рапорт на премию отклонён',
+        `Владелец ${status === 'approved' ? 'одобрил' : 'отклонил'} рапорт ${report.nickname} на сумму $${report.requestedAmount.toLocaleString()}`
+      );
+      addNotification(
+        status === 'approved' ? 'Рапорт одобрен' : 'Рапорт отклонён',
+        `Рапорт сотрудника ${report.nickname} переведён в статус «${status === 'approved' ? 'Одобрено' : 'Отклонено'}»`,
+        status === 'approved' ? 'success' : 'warning'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `bonus_reports/${reportId}`);
+    }
+  };
+
+  const deleteBonusReport = async (reportId: string) => {
+    if (currentUser?.role !== 'owner') return;
+    try {
+      await deleteDoc(doc(db, 'bonus_reports', reportId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `bonus_reports/${reportId}`);
+    }
+  };
+
+  const updateUserProfile = async (userId: string, updates: Partial<UserProfile>) => {
+    if (!currentUser) return;
+    if (currentUser.role === 'owner' && (updates.phone || updates.discord)) {
+      await updateUserCredentialsByOwner(userId, {
+        phone: updates.phone,
+        discord: updates.discord,
+      });
+    } else {
+      setCurrentUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...(updates.phone ? { phone: updates.phone } : {}),
+              ...(updates.discord ? { discord: updates.discord } : {}),
+            }
+          : null
+      );
+      addNotification('Реквизиты сохранены', 'Контактные реквизиты обновлены.', 'success');
+    }
+  };
+
+  const updateUserShiftStatus = async (userId: string, status: ShiftStatus) => {
+    const target = users.find((u) => u.id === userId);
+    if (!target) return;
+
+    try {
+      await updateDoc(doc(db, 'staff_profiles', userId), {
+        status,
+        lastActive: 'Онлайн',
+      });
+
+      const nextOnShiftCount = users.filter((u) =>
+        u.id === userId ? status === 'on_shift' : u.status === 'on_shift'
+      ).length;
+
+      await updateDoc(doc(db, 'corp_state', 'main'), {
+        activeWorkersCount: nextOnShiftCount,
+      });
+
+      await addAuditLog(
+        'profile',
+        'Статус смены',
+        `${target.displayName} перешел в «${status === 'on_shift' ? 'На смене' : 'Отдых'}»`
+      );
+      addNotification(
+        'Статус смены',
+        `${target.displayName} теперь «${status === 'on_shift' ? 'На смене' : 'Отдых'}»`,
+        'info'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
+    }
+  };
+
+  const updateFinancialsData = async (updates: Partial<CorporationFinancials>) => {
+    if (!currentUser) return;
+    if (!ROLE_DEFINITIONS[currentUser.role].permissions.canEditAnalytics) return;
+
+    const nextFin: CorporationFinancials = {
+      ...financials,
+      ...updates,
+      totalMined: updates.totalMined
+        ? { ...financials.totalMined, ...updates.totalMined }
+        : financials.totalMined,
+    };
+
+    try {
+      await saveFullCorpStateDoc(nextFin);
+      await addAuditLog(
+        'treasury',
+        'Редактирование аналитики/KPI',
+        `${currentUser.displayName} обновил показатели аналитики`
+      );
+      addNotification(
+        'Аналитика обновлена',
+        `${currentUser.displayName} обновил показатели корпоративной аналитики`,
+        'success'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'corp_state/main');
+    }
+  };
+
+  const adjustTreasury = async (deltaAmount: number, reason: string) => {
+    if (currentUser?.role !== 'owner') return;
+    const newBal = Math.max(0, financials.treasuryBalance + deltaAmount);
+    const nextFin: CorporationFinancials = {
+      ...financials,
+      treasuryBalance: newBal,
+      weeklyGain: deltaAmount > 0 ? financials.weeklyGain + deltaAmount : financials.weeklyGain,
+    };
+
+    try {
+      await saveFullCorpStateDoc(nextFin);
+      await addAuditLog(
+        'treasury',
+        deltaAmount >= 0 ? 'Пополнение казны' : 'Списание из казны',
+        `Сумма: ${deltaAmount >= 0 ? '+' : ''}$${deltaAmount.toLocaleString()} (${reason})`
+      );
+      addNotification(
+        'Движение казны',
+        `${deltaAmount >= 0 ? 'Пополнение' : 'Списание'}: $${Math.abs(deltaAmount).toLocaleString()}. Причина: ${reason}`,
+        deltaAmount >= 0 ? 'success' : 'alert'
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'corp_state/main');
+    }
+  };
+
+  const updateHallOfFameWinner = async (entryId: string, updates: Partial<HallOfFameEntry>) => {
+    const existingEntry = hallOfFame.find((h) => h.id === entryId);
+    if (!existingEntry) return;
+    const nextEntry: HallOfFameEntry = { ...existingEntry, ...updates };
+
+    try {
+      await setDoc(doc(db, 'hall_of_fame', entryId), {
+        id: nextEntry.id,
+        place: nextEntry.place,
+        nickname: (nextEntry.nickname || 'none').slice(0, 64),
+        cid: (nextEntry.cid || '-').slice(0, 32),
+        rankTitle: (nextEntry.rankTitle || '-').slice(0, 64),
+        totalMined: Math.max(0, nextEntry.totalMined),
+        bonusReward: Math.max(0, nextEntry.bonusReward),
+      });
+      await addAuditLog('hall_of_fame', 'Изменение Доски Почёта', `Место #${nextEntry.place}: ${nextEntry.nickname}`);
+      addNotification('Доска Почёта обновлена', 'Данные лидеров обновлены в облаке.', 'info');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `hall_of_fame/${entryId}`);
+    }
+  };
+
+  const updateVehicleStatus = async (
+    vehicleId: string,
+    status: VehicleStatus,
+    fuelPercent?: number
+  ) => {
+    const target = fleet.find((v) => v.id === vehicleId);
+    if (!target) return;
+
+    const nextVeh: VehicleItem = {
+      ...target,
+      status,
+      ...(fuelPercent !== undefined ? { fuelPercent: Math.min(100, Math.max(0, fuelPercent)) } : {}),
+    };
+
+    try {
+      await setDoc(doc(db, 'fleet', vehicleId), nextVeh);
+      await addAuditLog('fleet', 'Статус авто изменен', `${target.modelName} [${target.plate}] -> ${status}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fleet/${vehicleId}`);
+    }
+  };
+
+  const addVehicle = async (newVehicle: Omit<VehicleItem, 'id'>) => {
+    const vehId = `veh-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    const item: VehicleItem = {
+      id: vehId,
+      modelName: newVehicle.modelName.slice(0, 80),
+      category: newVehicle.category.slice(0, 80),
+      trunkKg: Math.max(0, newVehicle.trunkKg),
+      rankRequired: newVehicle.rankRequired.slice(0, 64),
+      slot: newVehicle.slot.slice(0, 64),
+      status: newVehicle.status,
+      fuelPercent: Math.min(100, Math.max(0, newVehicle.fuelPercent)),
+      plate: newVehicle.plate.slice(0, 32),
+    };
+
+    try {
+      await setDoc(doc(db, 'fleet', vehId), item);
+      await addAuditLog('fleet', 'Добавлен транспорт', `${item.modelName} [${item.plate}]`);
+      addNotification('Транспорт добавлен', `${item.modelName} [${item.plate}] добавлен в автопарк`, 'success');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `fleet/${vehId}`);
+    }
+  };
+
+  const deleteVehicle = async (vehicleId: string) => {
+    const targetVeh = fleet.find((v) => v.id === vehicleId);
+    try {
+      await deleteDoc(doc(db, 'fleet', vehicleId));
+      if (targetVeh) {
+        const label = `${targetVeh.modelName} [${targetVeh.plate}]`;
+        for (const u of users) {
+          if (u.assignedVehicle === label) {
+            await saveFullStaffProfileDoc({ ...u, assignedVehicle: '-' });
+          }
+        }
+      }
+      await addAuditLog('fleet', 'Удаление авто', `Удален транспорт ${targetVeh?.modelName || vehicleId}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `fleet/${vehicleId}`);
+    }
+  };
+
+  const markNotificationAsRead = (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  };
+
+  const clearAllNotifications = () => {
+    setNotifications([]);
+    setActiveToastIds([]);
+  };
+
+  const resetDatabaseToDefault = () => {
+    setCurrentUser(null);
+  };
+
+  return (
+    <DatabaseContext.Provider
+      value={{
+        users,
+        fleet,
+        hallOfFame,
+        financials,
+        auditLogs,
+        notifications,
+        bonusReports,
+        activeToastIds,
+        isCloudConnected,
+        currentUser,
+        currentRole: currentUser?.role || null,
+        lastSyncedAt,
+        syncEventCount,
+        isArchitectureModalOpen,
+        openArchitectureModal: () => setIsArchitectureModalOpen(true),
+        closeArchitectureModal: () => setIsArchitectureModalOpen(false),
+        loginWithCredentials,
+        createUserByAdmin,
+        updateUserCredentialsByOwner,
+        deleteUser,
+        logoutStaff,
+        recordFarmSubmission,
+        updateStaffFarmStats,
+        updateStaffVehicleAndNotes,
+        submitBonusReport,
+        reviewBonusReport,
+        deleteBonusReport,
+        updateUserProfile,
+        updateUserShiftStatus,
+        updateFinancialsData,
+        adjustTreasury,
+        updateHallOfFameWinner,
+        updateVehicleStatus,
+        addVehicle,
+        deleteVehicle,
+        markNotificationAsRead,
+        dismissToast,
+        clearAllNotifications,
+        resetDatabaseToDefault,
+      }}
+    >
+      {children}
+    </DatabaseContext.Provider>
+  );
+};
+
+export const useDatabase = () => {
+  const context = useContext(DatabaseContext);
+  if (!context) {
+    throw new Error('useDatabase must be used within a DatabaseProvider');
+  }
+  return context;
+};

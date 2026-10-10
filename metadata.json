@@ -1,0 +1,6 @@
+{
+  "name": "APATHY RP — Внутренний Портал Персонала",
+  "description": "Закрытый корпоративный портал для сотрудников корпорации APATHY на Radmir GTA 5 RP: регистрация, рабочие профили с RBAC, аналитика, доска почёта, калькулятор выплат 50/50, автопарк и аудит.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

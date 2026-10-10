@@ -1,0 +1,325 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedOwner() {
+      return isSignedIn() && request.auth.token.email == 'aleksanderkey3@gmail.com';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isBootstrappedOwner() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Validation Helpers
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'role', 'profileId', 'credentialHash']) &&
+        data.keys().hasOnly(['uid', 'role', 'profileId', 'credentialHash']) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.role is string && data.role.size() <= 16 &&
+        (data.role == 'owner' || data.role == 'admin' || data.role == 'hr') &&
+        data.profileId is string && data.profileId.size() >= 1 && data.profileId.size() <= 128 && data.profileId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.credentialHash is string && data.credentialHash.size() >= 1 && data.credentialHash.size() <= 128;
+    }
+
+    function isValidStaffProfile(data) {
+      return data.keys().hasAll([
+          'id', 'username', 'displayName', 'credentialHash', 'role', 'cid',
+          'rankNumber', 'rankName', 'department', 'walletBalance',
+          'rock', 'wood', 'blueFlower', 'redFlower', 'pinkFlower', 'totalEarned',
+          'assignedVehicle', 'status', 'bioNotes', 'joinedAt', 'lastActive'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'username', 'displayName', 'credentialHash', 'role', 'cid',
+          'rankNumber', 'rankName', 'department', 'walletBalance',
+          'rock', 'wood', 'blueFlower', 'redFlower', 'pinkFlower', 'totalEarned',
+          'assignedVehicle', 'status', 'bioNotes', 'joinedAt', 'lastActive'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.username is string && data.username.size() >= 1 && data.username.size() <= 64 &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 64 &&
+        data.credentialHash is string && data.credentialHash.size() >= 1 && data.credentialHash.size() <= 128 &&
+        data.role is string && data.role.size() <= 16 &&
+        (data.role == 'owner' || data.role == 'admin' || data.role == 'manager' || data.role == 'hr' || data.role == 'employee') &&
+        data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 &&
+        data.rankNumber is number && data.rankNumber >= 1 && data.rankNumber <= 10 &&
+        data.rankName is string && data.rankName.size() >= 1 && data.rankName.size() <= 64 &&
+        data.department is string && data.department.size() >= 1 && data.department.size() <= 64 &&
+        data.walletBalance is number && data.walletBalance >= 0 &&
+        data.rock is number && data.rock >= 0 &&
+        data.wood is number && data.wood >= 0 &&
+        data.blueFlower is number && data.blueFlower >= 0 &&
+        data.redFlower is number && data.redFlower >= 0 &&
+        data.pinkFlower is number && data.pinkFlower >= 0 &&
+        data.totalEarned is number && data.totalEarned >= 0 &&
+        data.assignedVehicle is string && data.assignedVehicle.size() >= 1 && data.assignedVehicle.size() <= 120 &&
+        data.status is string && data.status.size() <= 16 && (data.status == 'on_shift' || data.status == 'off_duty') &&
+        data.bioNotes is string && data.bioNotes.size() <= 500 &&
+        data.joinedAt is string && data.joinedAt.size() <= 32 &&
+        data.lastActive is string && data.lastActive.size() <= 64;
+    }
+
+    function isValidStaffSecret(data) {
+      return data.keys().hasAll(['id', 'phone', 'discord', 'pin']) &&
+        data.keys().hasOnly(['id', 'phone', 'discord', 'pin']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 64 &&
+        data.discord is string && data.discord.size() >= 1 && data.discord.size() <= 64 &&
+        data.pin is string && data.pin.size() >= 1 && data.pin.size() <= 32;
+    }
+
+    function isValidCorpState(data) {
+      return data.keys().hasAll([
+          'treasuryBalance', 'weeklyGain', 'rock', 'wood',
+          'blueFlower', 'redFlower', 'pinkFlower', 'totalEarned',
+          'activeWorkersCount', 'radioFrequency'
+        ]) &&
+        data.keys().hasOnly([
+          'treasuryBalance', 'weeklyGain', 'rock', 'wood',
+          'blueFlower', 'redFlower', 'pinkFlower', 'totalEarned',
+          'activeWorkersCount', 'radioFrequency'
+        ]) &&
+        data.treasuryBalance is number && data.treasuryBalance >= 0 &&
+        data.weeklyGain is number && data.weeklyGain >= 0 &&
+        data.rock is number && data.rock >= 0 &&
+        data.wood is number && data.wood >= 0 &&
+        data.blueFlower is number && data.blueFlower >= 0 &&
+        data.redFlower is number && data.redFlower >= 0 &&
+        data.pinkFlower is number && data.pinkFlower >= 0 &&
+        data.totalEarned is number && data.totalEarned >= 0 &&
+        data.activeWorkersCount is number && data.activeWorkersCount >= 0 &&
+        data.radioFrequency is string && data.radioFrequency.size() >= 1 && data.radioFrequency.size() <= 64;
+    }
+
+    function isValidVehicleItem(data) {
+      return data.keys().hasAll([
+          'id', 'modelName', 'category', 'trunkKg',
+          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'modelName', 'category', 'trunkKg',
+          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.modelName is string && data.modelName.size() >= 1 && data.modelName.size() <= 80 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.trunkKg is number && data.trunkKg >= 0 &&
+        data.rankRequired is string && data.rankRequired.size() >= 1 && data.rankRequired.size() <= 64 &&
+        data.slot is string && data.slot.size() >= 1 && data.slot.size() <= 64 &&
+        data.status is string && data.status.size() <= 32 &&
+        (data.status == 'Готов к выезду' || data.status == 'В рейсе' || data.status == 'Ремонт' || data.status == 'Зарезервирован' || data.status == 'Дежурство СБ') &&
+        data.fuelPercent is number && data.fuelPercent >= 0 && data.fuelPercent <= 100 &&
+        data.plate is string && data.plate.size() >= 1 && data.plate.size() <= 32;
+    }
+
+    function isValidHallOfFameEntry(data) {
+      return data.keys().hasAll(['id', 'place', 'nickname', 'cid', 'rankTitle', 'totalMined', 'bonusReward']) &&
+        data.keys().hasOnly(['id', 'place', 'nickname', 'cid', 'rankTitle', 'totalMined', 'bonusReward']) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.place is number && data.place >= 1 && data.place <= 3 &&
+        data.nickname is string && data.nickname.size() >= 1 && data.nickname.size() <= 64 &&
+        data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 &&
+        data.rankTitle is string && data.rankTitle.size() >= 1 && data.rankTitle.size() <= 64 &&
+        data.totalMined is number && data.totalMined >= 0 &&
+        data.bonusReward is number && data.bonusReward >= 0;
+    }
+
+    function isValidBonusReport(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'authorUid', 'nickname', 'cid', 'rankTitle',
+          'rock', 'wood', 'blueFlower', 'redFlower', 'pinkFlower',
+          'totalMinedItems', 'requestedAmount', 'comment', 'createdAt', 'status'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'authorUid', 'nickname', 'cid', 'rankTitle',
+          'rock', 'wood', 'blueFlower', 'redFlower', 'pinkFlower',
+          'totalMinedItems', 'requestedAmount', 'comment', 'createdAt', 'status'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 &&
+        data.nickname is string && data.nickname.size() >= 1 && data.nickname.size() <= 64 &&
+        data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 &&
+        data.rankTitle is string && data.rankTitle.size() >= 1 && data.rankTitle.size() <= 64 &&
+        data.rock is number && data.rock >= 0 &&
+        data.wood is number && data.wood >= 0 &&
+        data.blueFlower is number && data.blueFlower >= 0 &&
+        data.redFlower is number && data.redFlower >= 0 &&
+        data.pinkFlower is number && data.pinkFlower >= 0 &&
+        data.totalMinedItems is number && data.totalMinedItems >= 0 &&
+        data.requestedAmount is number && data.requestedAmount >= 0 &&
+        data.comment is string && data.comment.size() >= 1 && data.comment.size() <= 500 &&
+        data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64 &&
+        data.status is string && data.status.size() <= 16 &&
+        (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected');
+    }
+
+    function isValidAuditLogItem(data) {
+      return data.keys().hasAll([
+          'id', 'timestamp', 'actorId', 'actorUid', 'actorName',
+          'actorRole', 'module', 'action', 'details'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'timestamp', 'actorId', 'actorUid', 'actorName',
+          'actorRole', 'module', 'action', 'details'
+        ]) &&
+        data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64 &&
+        data.actorId is string && data.actorId.size() >= 1 && data.actorId.size() <= 128 &&
+        data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+        data.actorUid == request.auth.uid &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 64 &&
+        data.actorRole is string && data.actorRole.size() <= 16 &&
+        (data.actorRole == 'owner' || data.actorRole == 'admin' || data.actorRole == 'manager' || data.actorRole == 'hr' || data.actorRole == 'employee') &&
+        data.module is string && data.module.size() <= 32 &&
+        (data.module == 'users' || data.module == 'treasury' || data.module == 'fleet' || data.module == 'hall_of_fame' || data.module == 'recruitment' || data.module == 'farm' || data.module == 'profile' || data.module == 'bonus_report') &&
+        data.action is string && data.action.size() >= 1 && data.action.size() <= 120 &&
+        data.details is string && data.details.size() >= 1 && data.details.size() <= 500;
+    }
+
+    // Collection 1: /admins/{adminUid}
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isSignedIn() && existing().uid == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(adminUid) && isValidAdminRecord(incoming()) &&
+        incoming().uid == adminUid &&
+        incoming().uid == request.auth.uid && (
+          isAdmin() ||
+          incoming().credentialHash == '493280c790a2a988171849d2f24d47458732a4f59907d700222668162c6f275c' ||
+          (
+            exists(/databases/$(database)/documents/staff_profiles/$(incoming().profileId)) &&
+            get(/databases/$(database)/documents/staff_profiles/$(incoming().profileId)).data.credentialHash == incoming().credentialHash &&
+            get(/databases/$(database)/documents/staff_profiles/$(incoming().profileId)).data.role == incoming().role
+          )
+        );
+      allow update: if isSignedIn() && isValidId(adminUid) && isValidAdminRecord(incoming()) &&
+        incoming().uid == existing().uid &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'profileId', 'credentialHash']);
+      allow delete: if isSignedIn() && isValidId(adminUid) && isAdmin();
+    }
+
+    // Collection 2: /staff_profiles/{profileId} (Non-PII operational profiles)
+    match /staff_profiles/{profileId} {
+      allow get: if isSignedIn() && isValidId(profileId) && existing().id == profileId;
+      allow list: if isSignedIn() && existing().rankNumber >= 1;
+      allow create: if isSignedIn() && isValidId(profileId) && isValidStaffProfile(incoming()) && incoming().id == profileId && isAdmin();
+      allow update: if isSignedIn() && isValidId(profileId) && isValidStaffProfile(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().joinedAt == existing().joinedAt && (
+          isAdmin() ||
+          (
+            incoming().role == existing().role &&
+            incoming().credentialHash == existing().credentialHash &&
+            incoming().assignedVehicle == existing().assignedVehicle &&
+            incoming().bioNotes == existing().bioNotes &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lastActive'])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(profileId) && isAdmin();
+    }
+
+    // Collection 3: /staff_secrets/{profileId} (PII & PIN Isolation - Strictly Admin/Owner ONLY)
+    match /staff_secrets/{profileId} {
+      allow get: if isSignedIn() && isValidId(profileId) && isAdmin();
+      allow list: if isSignedIn() && existing().pin.size() >= 1 && isBootstrappedOwner();
+      allow create: if isSignedIn() && isValidId(profileId) && isValidStaffSecret(incoming()) && incoming().id == profileId && isAdmin();
+      allow update: if isSignedIn() && isValidId(profileId) && isValidStaffSecret(incoming()) &&
+        incoming().id == existing().id &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'discord', 'pin']);
+      allow delete: if isSignedIn() && isValidId(profileId) && isAdmin();
+    }
+
+    // Collection 4: /corp_state/{stateId}
+    match /corp_state/{stateId} {
+      allow get: if isSignedIn() && isValidId(stateId) && existing().treasuryBalance >= 0;
+      allow list: if isSignedIn() && existing().treasuryBalance >= 0;
+      allow create: if isSignedIn() && isValidId(stateId) && isValidCorpState(incoming()) && isAdmin();
+      allow update: if isSignedIn() && isValidId(stateId) && isValidCorpState(incoming()) && (
+        isAdmin() ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['activeWorkersCount'])
+      );
+      allow delete: if false;
+    }
+
+    // Collection 5: /fleet/{vehicleId}
+    match /fleet/{vehicleId} {
+      allow get: if isSignedIn() && isValidId(vehicleId) && existing().id == vehicleId;
+      allow list: if isSignedIn() && existing().trunkKg >= 0;
+      allow create: if isSignedIn() && isValidId(vehicleId) && isValidVehicleItem(incoming()) && incoming().id == vehicleId && isAdmin();
+      allow update: if isSignedIn() && isValidId(vehicleId) && isValidVehicleItem(incoming()) &&
+        incoming().id == existing().id &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['modelName', 'category', 'trunkKg', 'rankRequired', 'slot', 'status', 'fuelPercent', 'plate']);
+      allow delete: if isSignedIn() && isValidId(vehicleId) && isAdmin();
+    }
+
+    // Collection 6: /hall_of_fame/{entryId}
+    match /hall_of_fame/{entryId} {
+      allow get: if isSignedIn() && isValidId(entryId) && existing().id == entryId;
+      allow list: if isSignedIn() && existing().place >= 1;
+      allow create: if isSignedIn() && isValidId(entryId) && isValidHallOfFameEntry(incoming()) && incoming().id == entryId && isAdmin();
+      allow update: if isSignedIn() && isValidId(entryId) && isValidHallOfFameEntry(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().place == existing().place &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'cid', 'rankTitle', 'totalMined', 'bonusReward']);
+      allow delete: if false;
+    }
+
+    // Collection 7: /bonus_reports/{reportId}
+    match /bonus_reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (existing().authorUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().authorUid == request.auth.uid || existing().requestedAmount >= 0);
+      allow create: if isSignedIn() && isValidId(reportId) && isValidBonusReport(incoming()) &&
+        incoming().id == reportId &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().status == 'pending' &&
+        exists(/databases/$(database)/documents/staff_profiles/$(incoming().userId));
+      allow update: if isSignedIn() && isValidId(reportId) && isValidBonusReport(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().userId == existing().userId &&
+        incoming().authorUid == existing().authorUid &&
+        incoming().createdAt == existing().createdAt &&
+        isAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isSignedIn() && isValidId(reportId) && isAdmin();
+    }
+
+    // Collection 8: /audit_logs/{logId}
+    match /audit_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && (existing().actorUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && existing().timestamp.size() >= 1;
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLogItem(incoming()) &&
+        incoming().id == logId &&
+        exists(/databases/$(database)/documents/staff_profiles/$(incoming().actorId));
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
