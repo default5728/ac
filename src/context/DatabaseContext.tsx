@@ -1102,11 +1102,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       await addAuditLog(
         'farm',
-        'Начисление добычи (50/50)',
+        'Начисление добычи',
         `${targetUser.displayName}: начислено [Порода: ${items.rock}, Дерево: ${items.wood}, Цветы: ${items.blueFlower + items.redFlower + items.pinkFlower}]. Сотруднику: +$${driverCut.toLocaleString()}, в казну: +$${treasuryCut.toLocaleString()}`
       );
       addNotification(
-        'Добыча начислена (50/50)',
+        'Добыча начислена',
         `${targetUser.displayName} получил +$${driverCut.toLocaleString()} (50%), в казну +$${treasuryCut.toLocaleString()} (50%)`,
         'success'
       );
