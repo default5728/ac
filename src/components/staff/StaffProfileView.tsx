@@ -30,19 +30,18 @@ export const StaffProfileView: React.FC = () => {
     setAssignedVehicle(currentUser.assignedVehicle || '-');
   }, [currentUser]);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateUserProfile(currentUser.id, {
+    await updateUserProfile(currentUser.id, {
       phone,
       discord,
+      ...(canEditVehicleAndNotes
+        ? {
+            assignedVehicle,
+            bioNotes,
+          }
+        : {}),
     });
-
-    if (canEditVehicleAndNotes) {
-      updateStaffVehicleAndNotes(currentUser.id, {
-        assignedVehicle,
-        bioNotes,
-      });
-    }
 
     setProfileSavedNotice(true);
     setTimeout(() => setProfileSavedNotice(false), 3000);
@@ -107,7 +106,7 @@ export const StaffProfileView: React.FC = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10">
           <span className="text-[10px] font-mono-custom text-zinc-400 uppercase">
-            Баланс зарплаты (50%)
+            Баланс зарплаты
           </span>
           <div className="text-2xl font-black text-emerald-400 mt-1">
             ${currentUser.walletBalance.toLocaleString()}
