@@ -77,7 +77,7 @@ export const StaffPortalView: React.FC = () => {
     },
     {
       id: 'calculators',
-      label: 'Калькулятор Фарма 50/50',
+      label: 'Калькулятор Фарма',
       icon: <Calculator className="w-4 h-4" />,
       visible: true,
     },
