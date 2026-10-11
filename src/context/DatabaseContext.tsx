@@ -604,7 +604,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!currentUser) return;
     const updated = users.find((u) => u.id === currentUser.id);
     const latestSec = secretsMap[currentUser.id] || secretsMapRef.current[currentUser.id];
-    if (updated) {
+        if (updated) {
       setCurrentUser((prev) => {
         if (!prev) return null;
         return {
@@ -618,8 +618,21 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           pin: latestSec?.pin || (updated.pin !== '••••' ? updated.pin : prev.pin),
         };
       });
+      return;
     }
-  }, [users, secretsMap, currentUser?.id]);
+
+    // The roster is live in the cloud and this profile is no longer in it, so the account was
+    // deleted by the Owner. Sessions are restored from sessionStorage without re-checking
+    // credentials, which makes this the only place able to end a revoked session.
+    if (isCloudConnected && currentUser.role !== 'owner') {
+      setCurrentUser(null);
+      addNotification(
+        'Доступ отозван',
+        'Ваша учетная запись удалена из реестра персонала APATHY. Сессия завершена.',
+        'warning'
+      );
+    }
+  }, [users, secretsMap, currentUser?.id, isCloudConnected]);
 
   // Load isolated secrets by computed vault ID for current user (and all users if Owner/Admin)
   useEffect(() => {
