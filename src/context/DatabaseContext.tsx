@@ -588,7 +588,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             triggerSyncPulse();
           },
           (err) => {
-            handleFirestoreError(err, OperationType.LIST, 'applications');
+                console.error('Applications listener:', err);
           }
         );
       });
