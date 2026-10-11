@@ -1,5 +1,5 @@
-import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, type Firestore } from 'firebase/firestore';
+import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
+import { getFirestore, doc, setDoc, FirestoreError, type Firestore } from 'firebase/firestore';
 import applicationsConfigRaw from '../../firebase-applications-config.json';
 import { db as mainDb, ROOT_OWNER_HASH } from './firebase';
 
@@ -26,11 +26,21 @@ export { applicationsDb };
 
 // The applications rules gate staff list/update on isRootOwnerSeeded(), which checks for this
 // anchor doc. The dedicated project starts empty, so ac seeds the anchor once on boot to unlock
-// the review flow. Writing to the fallback main db is a harmless no-op (doc already exists).
+// the review flow.
+// The rules forbid get/list on /auth_hashes (hashes must not be enumerable), so existence cannot
+// be probed first: we write directly. The create rule requires the doc to be absent, therefore a
+// re-run — or the fallback to the main db, where the anchor already exists — is simply answered
+// with permission-denied, which means the anchor is already in place. Both outcomes unlock
+// isRootOwnerSeeded().
 export async function seedApplicationsOwnerAnchor(): Promise<void> {
-  const ref = doc(applicationsDb, 'auth_hashes', ROOT_OWNER_HASH);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, { id: ROOT_OWNER_HASH, profileId: 'u-owner-root', role: 'owner' });
+  try {
+    await setDoc(doc(applicationsDb, 'auth_hashes', ROOT_OWNER_HASH), {
+      id: ROOT_OWNER_HASH,
+      profileId: 'u-owner-root',
+      role: 'owner',
+    });
+  } catch (err) {
+    if (err instanceof FirestoreError && err.code === 'permission-denied') return;
+    throw err;
   }
 }
