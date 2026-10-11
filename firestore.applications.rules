@@ -1,0 +1,107 @@
+rules_version = '2';
+
+// Firestore Rules for the DEDICATED "applications" Firebase project.
+// This project ONLY stores candidate application forms pushed by the public recruiting site
+// (Apathy-Corp-Public) and reviewed in the staff portal (ac). It deliberately contains no staff
+// PII (auth_hashes/staff_profiles/staff_secrets stay in the main project), so the public site can
+// be given its web keys without exposing the corporate database.
+//
+// Deploy target: Firebase console → this new project → Firestore → Rules → Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Same owner anchor as the main project. ac seeds it once on boot (see seedApplicationsOwnerAnchor).
+    // Gate for staff-only reads/reviews; anonymous public writes do NOT require it.
+    function isRootOwnerSeeded() {
+      return exists(/databases/$(database)/documents/auth_hashes/493280c790a2a988171849d2f24d47458732a4f59907d700222668162c6f275c);
+    }
+
+    function isValidApplication(data) {
+      return data.keys().hasAll([
+          'id', 'nick', 'cid', 'phone', 'discord', 'docs',
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'nick', 'cid', 'phone', 'discord', 'docs',
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+        ]) &&
+        isValidId(data.id) &&
+        data.nick is string && data.nick.size() >= 2 && data.nick.size() <= 64 &&
+        data.nick.matches("^[A-Za-zА-Яа-яЁё0-9_\\.\\- ]+$") &&
+        data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 && data.cid.matches('^[A-Za-z0-9]+$') &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 64 && data.phone.matches('^[0-9\\-\\+ ]+$') &&
+        data.discord is string && data.discord.size() >= 2 && data.discord.size() <= 64 &&
+        data.docs is string && data.docs.size() >= 12 && data.docs.size() <= 300 && data.docs.matches('^https://[^\\s]+$') &&
+        data.status is string && data.status.size() <= 16 &&
+        (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected') &&
+        data.submittedAt is string && data.submittedAt.size() >= 10 && data.submittedAt.size() <= 64 &&
+        data.source is string && data.source.size() >= 1 && data.source.size() <= 32 && data.source.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.reviewedAt is string && data.reviewedAt.size() <= 64 &&
+        data.reviewerNotes is string && data.reviewerNotes.size() <= 500 &&
+        data.createdProfileId is string && data.createdProfileId.size() <= 128 &&
+        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$'));
+    }
+
+    // Bootstrap anchor: ac writes this single well-known doc once so isRootOwnerSeeded() becomes
+    // true and staff reviews unlock. Immutable, and only the exact ROOT hash id may be created.
+    match /auth_hashes/{credHash} {
+      allow get: if false;
+      allow list: if false;
+      allow create: if credHash == '493280c790a2a988171849d2f24d47458732a4f59907d700222668162c6f275c' &&
+        !exists(/databases/$(database)/documents/auth_hashes/$(credHash)) &&
+        incoming().id == credHash &&
+        incoming().profileId == 'u-owner-root' &&
+        incoming().role == 'owner' &&
+        incoming().keys().hasOnly(['id', 'profileId', 'role']);
+      allow update, delete: if false;
+    }
+
+    // /applications/{appId}
+    match /applications/{appId} {
+      // Staff portal only: reading the queue requires the owner anchor to exist.
+      allow get: if isValidId(appId) && existing().id == appId && isRootOwnerSeeded();
+      allow list: if isRootOwnerSeeded();
+
+      // Public write: anonymous, pending-only, review fields must be empty.
+      allow create: if isValidId(appId) && isValidApplication(incoming()) &&
+        incoming().id == appId &&
+        incoming().status == 'pending' &&
+        incoming().reviewedAt == '' &&
+        incoming().reviewerNotes == '' &&
+        incoming().createdProfileId == '';
+
+      // Staff review: requires anchor; contact data frozen; pending -> terminal only.
+      allow update: if isValidId(appId) && isValidApplication(incoming()) &&
+        incoming().id == existing().id &&
+        isRootOwnerSeeded() &&
+        existing().status == 'pending' &&
+        (incoming().status == 'approved' || incoming().status == 'rejected') &&
+        incoming().nick == existing().nick &&
+        incoming().cid == existing().cid &&
+        incoming().phone == existing().phone &&
+        incoming().discord == existing().discord &&
+        incoming().docs == existing().docs &&
+        incoming().submittedAt == existing().submittedAt &&
+        incoming().source == existing().source &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewerNotes', 'createdProfileId']);
+
+      allow delete: if false;
+    }
+  }
+}

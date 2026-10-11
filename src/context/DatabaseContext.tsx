@@ -18,6 +18,7 @@ import {
   computeSecretVaultId,
   ROOT_OWNER_HASH,
 } from '../lib/firebase';
+import { applicationsDb, seedApplicationsOwnerAnchor } from '../lib/applicationsFirebase';
 import {
   UserProfile,
   UserRole,
@@ -33,6 +34,8 @@ import {
   VehicleStatus,
   BonusReport,
   BonusReportStatus,
+  CandidateApplication,
+  ApplicationStatus,
 } from '../types/database';
 import {
   INITIAL_USERS,
@@ -61,6 +64,7 @@ interface DatabaseContextType {
   auditLogs: AuditLogItem[];
   notifications: AppNotification[];
   bonusReports: BonusReport[];
+  applications: CandidateApplication[];
   activeToastIds: string[];
 
   // Cloud & Session status
@@ -103,6 +107,16 @@ interface DatabaseContextType {
   ) => Promise<void>;
   deleteUser: (userId: string) => Promise<void>;
   logoutStaff: () => void;
+
+  // Recruitment: applications submitted on the public portal
+  approveCandidateApplication: (
+    appId: string,
+    credentials: { pin: string; role: UserRole; department?: string }
+  ) => Promise<{ success: boolean; error?: string }>;
+  rejectCandidateApplication: (
+    appId: string,
+    reason: string
+  ) => Promise<{ success: boolean; error?: string }>;
 
   // Staff Farm Management (Owner, Admin, HR ONLY)
   recordFarmSubmission: (
@@ -178,6 +192,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(INITIAL_AUDIT_LOGS);
   const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
   const [bonusReports, setBonusReports] = useState<BonusReport[]>(INITIAL_BONUS_REPORTS);
+  const [applications, setApplications] = useState<CandidateApplication[]>([]);
   const [activeToastIds, setActiveToastIds] = useState<string[]>([]);
 
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
@@ -532,6 +547,58 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     };
   }, [mapDocToUserProfile, triggerSyncPulse]);
 
+  // Applications live in a dedicated Firebase project. Seed the owner anchor first (its rules
+  // gate staff list on isRootOwnerSeeded), then subscribe. Seeding-then-listening avoids the
+  // race where the list query fires before the anchor exists and gets denied with no retry.
+  useEffect(() => {
+    let cancelled = false;
+    let unsub: (() => void) | undefined;
+
+    seedApplicationsOwnerAnchor()
+      .catch((err) => console.warn('Applications anchor seed:', err))
+      .finally(() => {
+        if (cancelled) return;
+        const qApplications = query(
+          collection(applicationsDb, 'applications'),
+          where('submittedAt', '>=', '0')
+        );
+        unsub = onSnapshot(
+          qApplications,
+          (snap) => {
+            const items: CandidateApplication[] = snap.docs
+              .map((d) => {
+                const data = d.data();
+                return {
+                  id: String(data.id || d.id),
+                  nick: String(data.nick || ''),
+                  cid: String(data.cid || ''),
+                  phone: String(data.phone || ''),
+                  discord: String(data.discord || ''),
+                  docs: String(data.docs || ''),
+                  status: (data.status as ApplicationStatus) || 'pending',
+                  submittedAt: String(data.submittedAt || ''),
+                  source: String(data.source || ''),
+                  reviewedAt: String(data.reviewedAt || ''),
+                  reviewerNotes: String(data.reviewerNotes || ''),
+                  createdProfileId: String(data.createdProfileId || ''),
+                };
+              })
+              .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+            setApplications(items);
+            triggerSyncPulse();
+          },
+          (err) => {
+            handleFirestoreError(err, OperationType.LIST, 'applications');
+          }
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [triggerSyncPulse]);
+
   // Keep currentUser synced with live updates from `users`
   useEffect(() => {
     if (!currentUser) return;
@@ -765,8 +832,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Registration: ONLY by Owner
-  const createUserByAdmin = async (newUserData: {
+  // Zero-knowledge provisioning shared by manual registration and recruitment approval:
+  // writes /auth_hashes/{credHash} + /staff_profiles/{id} + /staff_secrets/{vaultId}
+  const provisionStaffAccount = async (newUserData: {
     displayName: string;
     cid: string;
     phone: string;
@@ -775,11 +843,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     role: UserRole;
     rankNumber?: number;
     department?: string;
-  }) => {
-    if (currentUser?.role !== 'owner') {
-      return { success: false, error: 'Только Владелец корпорации может регистрировать новые учетные записи!' };
-    }
-
+    bioNotes?: string;
+  }): Promise<{ success: boolean; error?: string; userId?: string }> => {
     const nickClean = newUserData.displayName.trim().slice(0, 64);
     const cidClean = newUserData.cid.trim().toUpperCase().slice(0, 32);
     const phoneClean = newUserData.phone.trim().slice(0, 64);
@@ -844,7 +909,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         totalEarned: 0,
         assignedVehicle: '-',
         status: 'off_duty',
-        bioNotes: 'Сотрудник зарегистрирован Владельцем корпорации APATHY.',
+        bioNotes: (newUserData.bioNotes ?? 'Сотрудник зарегистрирован Владельцем корпорации APATHY.').slice(0, 500),
         joinedAt,
         lastActive: 'Не входил',
       });
@@ -866,22 +931,146 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         [newId]: newSecEntry,
       }));
 
-      addNotification(
-        'Сотрудник создан в облаке',
-        `Владелец зарегистрировал сотрудника ${nickClean} [${ROLE_DEFINITIONS[newUserData.role].title}]`,
-        'success'
-      );
-      await addAuditLog(
-        'users',
-        'Создание учетной записи',
-        `Владелец создал профиль ${nickClean} (CID: ${cidClean}, Роль: ${newUserData.role})`
-      );
-
-      return { success: true };
+      return { success: true, userId: newId };
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `staff_profiles/${newId}`);
-      return { success: false, error: 'Ошибка сохранения в облачную БД.' };
+      // Log-only: handleFirestoreError() throws, which would swallow the message
+      // instead of surfacing it in the HR form.
+      console.error('Staff account provisioning failed:', error);
+      return {
+        success: false,
+        error: 'Не удалось сохранить сотрудника в облачную БД (проверьте доступ к Firestore и правила безопасности).',
+      };
     }
+  };
+
+  // Registration: ONLY by Owner
+  const createUserByAdmin = async (newUserData: {
+    displayName: string;
+    cid: string;
+    phone: string;
+    discord: string;
+    pin: string;
+    role: UserRole;
+    rankNumber?: number;
+    department?: string;
+  }) => {
+    if (currentUser?.role !== 'owner') {
+      return { success: false, error: 'Только Владелец корпорации может регистрировать новые учетные записи!' };
+    }
+
+    const result = await provisionStaffAccount(newUserData);
+    if (!result.success) return result;
+
+    const nickClean = newUserData.displayName.trim().slice(0, 64);
+    const cidClean = newUserData.cid.trim().toUpperCase().slice(0, 32);
+
+    addNotification(
+      'Сотрудник создан в облаке',
+      `Владелец зарегистрировал сотрудника ${nickClean} [${ROLE_DEFINITIONS[newUserData.role].title}]`,
+      'success'
+    );
+    await addAuditLog(
+      'users',
+      'Создание учетной записи',
+      `Владелец создал профиль ${nickClean} (CID: ${cidClean}, Роль: ${newUserData.role})`
+    );
+
+    return { success: true };
+  };
+
+  const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+  // Accepting a public-portal application creates the staff account with the PIN typed here
+  const approveCandidateApplication = async (
+    appId: string,
+    credentials: { pin: string; role: UserRole; department?: string }
+  ) => {
+    if (currentUser?.role !== 'owner') {
+      return { success: false, error: 'Принимать заявки может только Владелец корпорации!' };
+    }
+
+    const app = applications.find((a) => a.id === appId);
+    if (!app) return { success: false, error: 'Заявка не найдена в базе данных.' };
+    if (app.status !== 'pending') {
+      return { success: false, error: 'Заявка уже обработана ранее.' };
+    }
+
+    const role: UserRole = credentials.role === 'owner' ? 'employee' : credentials.role;
+
+    const provisioned = await provisionStaffAccount({
+      displayName: app.nick,
+      cid: app.cid,
+      phone: app.phone,
+      discord: app.discord,
+      pin: credentials.pin,
+      role,
+      department: credentials.department,
+      bioNotes: `Принят по заявке с публичного сайта APATHY (${app.submittedAt.slice(0, 10)}). CID подтверждён кандидатом.`,
+    });
+    if (!provisioned.success || !provisioned.userId) return provisioned;
+
+    const newUserId = provisioned.userId;
+
+    try {
+      await updateDoc(doc(applicationsDb, 'applications', appId), {
+        status: 'approved',
+        reviewedAt: nowStamp(),
+        createdProfileId: newUserId,
+      });
+    } catch (error) {
+      console.error('Application approve status update failed:', error);
+      return {
+        success: false,
+        error: `Учетная запись создана, но статус заявки не обновился в БД. Повторно заявку не принимайте.`,
+      };
+    }
+
+    await addAuditLog(
+      'recruitment',
+      'Заявка одобрена',
+      `Владелец принял кандидата ${app.nick} (CID: ${app.cid}) с публичного сайта и создал учетную запись ${newUserId}`
+    );
+    addNotification(
+      'Заявка принята',
+      `${app.nick} [${ROLE_DEFINITIONS[role].title}] зачислен в штат, реквизиты для входа созданы`,
+      'success'
+    );
+
+    return { success: true };
+  };
+
+  const rejectCandidateApplication = async (appId: string, reason: string) => {
+    if (currentUser?.role !== 'owner') {
+      return { success: false, error: 'Отклонять заявки может только Владелец корпорации!' };
+    }
+
+    const app = applications.find((a) => a.id === appId);
+    if (!app) return { success: false, error: 'Заявка не найдена в базе данных.' };
+    if (app.status !== 'pending') {
+      return { success: false, error: 'Заявка уже обработана ранее.' };
+    }
+
+    const noteClean = (reason.trim() || 'Отклонено без комментария.').slice(0, 500);
+
+    try {
+      await updateDoc(doc(applicationsDb, 'applications', appId), {
+        status: 'rejected',
+        reviewedAt: nowStamp(),
+        reviewerNotes: noteClean,
+      });
+    } catch (error) {
+      console.error('Application reject status update failed:', error);
+      return { success: false, error: 'Не удалось обновить статус заявки в облачной БД.' };
+    }
+
+    await addAuditLog(
+      'recruitment',
+      'Заявка отклонена',
+      `Владелец отклонил заявку ${app.nick} (CID: ${app.cid}): ${noteClean}`
+    );
+    addNotification('Заявка отклонена', `Кандидат ${app.nick} [${app.cid}] получил отказ`, 'warning');
+
+    return { success: true };
   };
 
   const updateUserCredentialsByOwner = async (
@@ -1715,6 +1904,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         auditLogs,
         notifications,
         bonusReports,
+        applications,
         activeToastIds,
         isCloudConnected,
         currentUser,
@@ -1729,6 +1919,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateUserCredentialsByOwner,
         deleteUser,
         logoutStaff,
+        approveCandidateApplication,
+        rejectCandidateApplication,
         recordFarmSubmission,
         updateStaffFarmStats,
         updateStaffVehicleAndNotes,

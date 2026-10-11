@@ -206,6 +206,25 @@ export interface BonusReport {
   reviewedBy?: string;
 }
 
+export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
+
+// Mirrors the /applications/{appId} document written by the public portal
+// (Apathy-Corp-Public). Field names must stay in sync with firestore.rules.
+export interface CandidateApplication {
+  id: string;
+  nick: string;
+  cid: string;
+  phone: string;
+  discord: string;
+  docs: string;
+  status: ApplicationStatus;
+  submittedAt: string;
+  source: string;
+  reviewedAt: string;
+  reviewerNotes: string;
+  createdProfileId: string;
+}
+
 export interface AuditLogItem {
   id: string;
   timestamp: string;

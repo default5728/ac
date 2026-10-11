@@ -167,6 +167,34 @@ service cloud.firestore {
         (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected');
     }
 
+    // Applicant PII arrives from the unauthenticated public portal, so every field is
+    // pattern-checked here: the collection is otherwise a public write endpoint.
+    function isValidApplication(data) {
+      return data.keys().hasAll([
+          'id', 'nick', 'cid', 'phone', 'discord', 'docs',
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'nick', 'cid', 'phone', 'discord', 'docs',
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+        ]) &&
+        isValidId(data.id) &&
+        data.nick is string && data.nick.size() >= 2 && data.nick.size() <= 64 &&
+        data.nick.matches("^[A-Za-zА-Яа-яЁё0-9_\\.\\- ]+$") &&
+        data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 && data.cid.matches('^[A-Za-z0-9]+$') &&
+        data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 64 && data.phone.matches('^[0-9\\-\\+ ]+$') &&
+        data.discord is string && data.discord.size() >= 2 && data.discord.size() <= 64 &&
+        data.docs is string && data.docs.size() >= 12 && data.docs.size() <= 300 && data.docs.matches('^https://[^\\s]+$') &&
+        data.status is string && data.status.size() <= 16 &&
+        (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected') &&
+        data.submittedAt is string && data.submittedAt.size() >= 10 && data.submittedAt.size() <= 64 &&
+        data.source is string && data.source.size() >= 1 && data.source.size() <= 32 && data.source.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.reviewedAt is string && data.reviewedAt.size() <= 64 &&
+        data.reviewerNotes is string && data.reviewerNotes.size() <= 500 &&
+        data.createdProfileId is string && data.createdProfileId.size() <= 128 &&
+        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$'));
+    }
+
     function isValidAuditLogItem(data) {
       return data.keys().hasAll([
           'id', 'timestamp', 'actorId', 'actorName',
@@ -301,6 +329,38 @@ service cloud.firestore {
         incoming().id == logId &&
         exists(/databases/$(database)/documents/staff_profiles/$(incoming().actorId));
       allow update: if false;
+      allow delete: if false;
+    }
+
+    // Collection 9: /applications/{appId}
+    // Applicant forms pushed by the public portal (Apathy-Corp-Public) and reviewed in the staff portal.
+    match /applications/{appId} {
+      allow get: if isValidId(appId) && existing().id == appId && isRootOwnerSeeded();
+      allow list: if existing().id == appId && isRootOwnerSeeded();
+
+      // Public write: pending form only, no review fields.
+      allow create: if isValidId(appId) && isValidApplication(incoming()) &&
+        incoming().id == appId &&
+        incoming().status == 'pending' &&
+        incoming().reviewedAt == '' &&
+        incoming().reviewerNotes == '' &&
+        incoming().createdProfileId == '';
+
+      // Staff review: contact data is frozen and a terminal status can never be reopened.
+      allow update: if isValidId(appId) && isValidApplication(incoming()) &&
+        incoming().id == existing().id &&
+        isRootOwnerSeeded() &&
+        existing().status == 'pending' &&
+        (incoming().status == 'approved' || incoming().status == 'rejected') &&
+        incoming().nick == existing().nick &&
+        incoming().cid == existing().cid &&
+        incoming().phone == existing().phone &&
+        incoming().discord == existing().discord &&
+        incoming().docs == existing().docs &&
+        incoming().submittedAt == existing().submittedAt &&
+        incoming().source == existing().source &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewerNotes', 'createdProfileId']);
+
       allow delete: if false;
     }
   }

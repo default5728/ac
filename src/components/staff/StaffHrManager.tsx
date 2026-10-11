@@ -16,6 +16,11 @@ import {
   Save,
   X,
   PlusCircle,
+  Inbox,
+  ExternalLink,
+  Clock,
+  XCircle,
+  UserCheck,
 } from 'lucide-react';
 import { ROLE_DEFINITIONS, UserRole, UserProfile } from '../../types/database';
 
@@ -24,12 +29,15 @@ export const StaffHrManager: React.FC = () => {
     users,
     fleet,
     currentUser,
+    applications,
     createUserByAdmin,
     updateUserCredentialsByOwner,
     deleteUser,
     updateStaffFarmStats,
     recordFarmSubmission,
     updateStaffVehicleAndNotes,
+    approveCandidateApplication,
+    rejectCandidateApplication,
   } = useDatabase();
 
   const userRole = currentUser?.role || 'employee';
@@ -37,7 +45,7 @@ export const StaffHrManager: React.FC = () => {
   const canEditStaffFarm = ROLE_DEFINITIONS[userRole].permissions.canEditStaffFarm; // owner, admin, hr
   const canEditVehAndNotes = ROLE_DEFINITIONS[userRole].permissions.canEditStaffVehicleAndNotes; // owner, admin
 
-  const [activeTab, setActiveTab] = useState<'roster' | 'create'>('roster');
+  const [activeTab, setActiveTab] = useState<'roster' | 'create' | 'applications'>('roster');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
 
@@ -79,6 +87,108 @@ export const StaffHrManager: React.FC = () => {
   const [farmRed, setFarmRed] = useState('0');
   const [farmPink, setFarmPink] = useState('0');
   const [farmWallet, setFarmWallet] = useState('0');
+
+  // Recruitment queue (applications from the public portal)
+  const [applicationFilter, setApplicationFilter] = useState<'pending' | 'all'>('pending');
+  const [reviewTargetId, setReviewTargetId] = useState<string | null>(null);
+  const [reviewMode, setReviewMode] = useState<'approve' | 'reject'>('approve');
+  const [reviewPin, setReviewPin] = useState('');
+  const [reviewRole, setReviewRole] = useState<UserRole>('employee');
+  const [reviewDepartment, setReviewDepartment] = useState('Цех добычи');
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewError, setReviewError] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [approvedCard, setApprovedCard] = useState<{
+    nick: string;
+    cid: string;
+    phone: string;
+    discord: string;
+    pin: string;
+    roleTitle: string;
+  } | null>(null);
+  const [copiedApproved, setCopiedApproved] = useState(false);
+
+  const pendingApplications = applications.filter((a) => a.status === 'pending');
+  const visibleApplications =
+    applicationFilter === 'pending' ? pendingApplications : applications;
+
+  const startReview = (appId: string, mode: 'approve' | 'reject') => {
+    setReviewTargetId(appId);
+    setReviewMode(mode);
+    setReviewError('');
+    setReviewPin('');
+    setReviewReason('');
+    setReviewRole('employee');
+    setReviewDepartment('Цех добычи');
+  };
+
+  const cancelReview = () => {
+    setReviewTargetId(null);
+    setReviewError('');
+  };
+
+  const handleApproveApplication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewTargetId) return;
+    const target = applications.find((a) => a.id === reviewTargetId);
+    if (!target) return;
+
+    if (!reviewPin.trim()) {
+      setReviewError('Введите PIN-код, по которому сотрудник будет входить в портал.');
+      return;
+    }
+
+    setReviewBusy(true);
+    setReviewError('');
+    const result = await approveCandidateApplication(reviewTargetId, {
+      pin: reviewPin.trim(),
+      role: reviewRole,
+      department: reviewDepartment.trim() || 'Цех добычи',
+    });
+    setReviewBusy(false);
+
+    if (!result.success) {
+      setReviewError(result.error || 'Не удалось принять заявку.');
+      return;
+    }
+
+    setApprovedCard({
+      nick: target.nick,
+      cid: target.cid,
+      phone: target.phone,
+      discord: target.discord,
+      pin: reviewPin.trim(),
+      roleTitle: ROLE_DEFINITIONS[reviewRole].title,
+    });
+    cancelReview();
+  };
+
+  const handleRejectApplication = async () => {
+    if (!reviewTargetId) return;
+    setReviewBusy(true);
+    setReviewError('');
+    const result = await rejectCandidateApplication(reviewTargetId, reviewReason);
+    setReviewBusy(false);
+    if (!result.success) {
+      setReviewError(result.error || 'Не удалось отклонить заявку.');
+      return;
+    }
+    cancelReview();
+  };
+
+  const handleCopyApproved = () => {
+    if (!approvedCard) return;
+    const text = `Реквизиты для входа в портал APATHY:
+Ник: ${approvedCard.nick}
+CID: ${approvedCard.cid}
+Телефон: ${approvedCard.phone}
+Discord: ${approvedCard.discord}
+PIN-код: ${approvedCard.pin}
+Роль: ${approvedCard.roleTitle}`;
+    navigator.clipboard.writeText(text);
+    setCopiedApproved(true);
+    setTimeout(() => setCopiedApproved(false), 2500);
+  };
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -263,6 +373,20 @@ PIN-код: ${createdCredentialsCard.pin}
               <span>Зарегистрировать сотрудника</span>
             </button>
           )}
+
+          <button
+            onClick={() => setActiveTab('applications')}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+              activeTab === 'applications'
+                ? 'bg-emerald-500 text-black font-bold'
+                : 'text-emerald-300 hover:bg-emerald-950/40'
+            }`}
+          >
+            <Inbox className="w-3.5 h-3.5" />
+            <span>
+              Заявки{pendingApplications.length > 0 ? ` (${pendingApplications.length})` : ''}
+            </span>
+          </button>
         </div>
       </div>
 
@@ -396,6 +520,302 @@ PIN-код: ${createdCredentialsCard.pin}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* TAB 3: RECRUITMENT APPLICATIONS (from the public portal) */}
+      {activeTab === 'applications' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl bg-zinc-950 border border-white/10">
+            <div className="flex items-center gap-2 text-xs font-mono-custom text-zinc-400">
+              <Inbox className="w-4 h-4 text-emerald-400" />
+              <span>
+                Анкеты кандидатов с публичного сайта APATHY. Принятие заявки выпускает
+                учетную запись сотрудника с указанным вами PIN-кодом.
+              </span>
+            </div>
+            <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10 font-mono-custom text-xs">
+              <button
+                onClick={() => setApplicationFilter('pending')}
+                className={`px-3 py-1 rounded-lg cursor-pointer ${
+                  applicationFilter === 'pending'
+                    ? 'bg-emerald-500 text-black font-bold'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Ожидают решения ({pendingApplications.length})
+              </button>
+              <button
+                onClick={() => setApplicationFilter('all')}
+                className={`px-3 py-1 rounded-lg cursor-pointer ${
+                  applicationFilter === 'all'
+                    ? 'bg-cyan-500 text-black font-bold'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Все ({applications.length})
+              </button>
+            </div>
+          </div>
+
+          {!isOwner && (
+            <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 text-[11px] font-mono-custom">
+              Просмотр очереди заявок. Принимать и отклонять анкеты может только Владелец корпорации.
+            </div>
+          )}
+
+          {approvedCard && (
+            <div className="p-5 rounded-2xl bg-emerald-950/30 border border-emerald-500/40 shadow-xl animate-fadeIn font-mono-custom">
+              <div className="flex items-center justify-between pb-3 border-b border-emerald-500/20 mb-4">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                  <UserCheck className="w-5 h-5" />
+                  <span>
+                    Заявка принята — {approvedCard.nick} зачислен(а) в штат. Передайте реквизиты в Discord:
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCopyApproved}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    {copiedApproved ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    {copiedApproved ? 'Скопировано!' : 'Скопировать'}
+                  </button>
+                  <button
+                    onClick={() => setApprovedCard(null)}
+                    className="p-1.5 rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs bg-black/50 p-4 rounded-xl border border-white/5">
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">NickName</span>
+                  <b className="text-white text-sm">{approvedCard.nick}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">CID</span>
+                  <b className="text-cyan-400 text-sm">{approvedCard.cid}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Телефон</span>
+                  <b className="text-zinc-200 text-sm">{approvedCard.phone}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">Discord</span>
+                  <b className="text-blue-300 text-sm">{approvedCard.discord}</b>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 uppercase block">PIN-код</span>
+                  <b className="text-amber-400 text-sm">{approvedCard.pin}</b>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {visibleApplications.length === 0 ? (
+            <div className="p-10 text-center rounded-2xl bg-zinc-950 border border-white/10">
+              <Clock className="w-8 h-8 mx-auto mb-3 text-zinc-600" />
+              <p className="text-xs font-mono-custom text-zinc-500">
+                {applications.length === 0
+                  ? 'Заявок пока нет. Анкеты с публичного сайта появятся здесь автоматически, без перезагрузки страницы.'
+                  : 'Нет заявок с этим статусом.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono-custom text-xs">
+              {visibleApplications.map((app) => {
+                const isReviewed = app.status !== 'pending';
+                const statusBadge =
+                  app.status === 'approved'
+                    ? 'border-emerald-500/50 text-emerald-300 bg-emerald-950/40'
+                    : app.status === 'rejected'
+                    ? 'border-rose-500/50 text-rose-300 bg-rose-950/40'
+                    : 'border-cyan-500/50 text-cyan-300 bg-cyan-950/40';
+                const statusLabel =
+                  app.status === 'approved'
+                    ? 'Принята'
+                    : app.status === 'rejected'
+                    ? 'Отклонена'
+                    : 'Ожидает решения';
+
+                return (
+                  <div
+                    key={app.id}
+                    className={`p-5 rounded-2xl bg-zinc-950 border flex flex-col gap-3 shadow-lg ${
+                      app.status === 'pending' ? 'border-emerald-500/25' : 'border-white/10'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div>
+                        <h4 className="text-sm font-bold text-white">{app.nick}</h4>
+                        <div className="text-[11px] text-zinc-400 mt-0.5">
+                          CID: <b className="text-cyan-400">{app.cid}</b> · {app.submittedAt.replace('T', ' ').slice(0, 16)}
+                        </div>
+                      </div>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${statusBadge}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 space-y-1.5">
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Телефон:</span>
+                        <span className="text-zinc-200">{app.phone}</span>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Discord для связи:</span>
+                        <span className="text-blue-300">{app.discord}</span>
+                      </div>
+                      <div className="flex justify-between items-center gap-2 text-zinc-400 pt-1 border-t border-white/5">
+                        <span>Скрин документов:</span>
+                        <a
+                          href={app.docs}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-cyan-400 hover:text-white underline flex items-center gap-1 truncate max-w-[60%]"
+                        >
+                          <span className="truncate">{app.docs}</span>
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                        </a>
+                      </div>
+                    </div>
+
+                    {isReviewed && (
+                      <div className="text-[11px] text-zinc-500 border-t border-white/5 pt-2">
+                        Обработано: {app.reviewedAt || '—'}
+                        {app.reviewerNotes ? ` · Причина: ${app.reviewerNotes}` : ''}
+                      </div>
+                    )}
+
+                    {isOwner && !isReviewed && reviewTargetId !== app.id && (
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => startReview(app.id, 'approve')}
+                          className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Принять</span>
+                        </button>
+                        <button
+                          onClick={() => startReview(app.id, 'reject')}
+                          className="flex-1 py-2 rounded-xl bg-rose-950/50 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          <span>Отклонить</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {isOwner && reviewTargetId === app.id && reviewMode === 'approve' && (
+                      <form
+                        onSubmit={handleApproveApplication}
+                        className="space-y-3 p-3 rounded-xl bg-black/50 border border-emerald-500/30"
+                      >
+                        <div className="text-[11px] text-emerald-300">
+                          Учетная запись будет создана по данным заявки. Введите PIN-код для входа сотрудника.
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-zinc-400 mb-1 text-[10px]">
+                              PIN-код для входа: <span className="text-rose-400">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={reviewPin}
+                              onChange={(e) => setReviewPin(e.target.value)}
+                              placeholder="1234"
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-amber-500/40 text-amber-300 text-xs focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-zinc-400 mb-1 text-[10px]">Роль в корпорации:</label>
+                            <select
+                              value={reviewRole}
+                              onChange={(e) => setReviewRole(e.target.value as UserRole)}
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-white text-xs focus:outline-none focus:border-emerald-400"
+                            >
+                              <option value="employee">Сотрудник / Фармер [04]</option>
+                              <option value="hr">Отдел кадров (HR) [05]</option>
+                              <option value="manager">Менеджер / Логист [06]</option>
+                              <option value="admin">Администратор / Зам [09]</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-zinc-400 mb-1 text-[10px]">Отдел:</label>
+                            <input
+                              type="text"
+                              value={reviewDepartment}
+                              onChange={(e) => setReviewDepartment(e.target.value)}
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-white text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                        </div>
+                        {reviewError && (
+                          <div className="p-2 rounded-lg bg-rose-950/70 border border-rose-500/40 text-rose-300 text-[11px]">
+                            {reviewError}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            type="submit"
+                            disabled={reviewBusy}
+                            className="flex-1 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                            <span>{reviewBusy ? 'Создание учетной записи...' : 'Создать учетную запись'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelReview}
+                            className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </form>
+                    )}
+
+                    {isOwner && reviewTargetId === app.id && reviewMode === 'reject' && (
+                      <div className="space-y-3 p-3 rounded-xl bg-black/50 border border-rose-500/30">
+                        <div className="text-[11px] text-rose-300">
+                          Причина отказа сохранится в карточке заявки и в журнале аудита.
+                        </div>
+                        <input
+                          type="text"
+                          value={reviewReason}
+                          onChange={(e) => setReviewReason(e.target.value)}
+                          placeholder="Например: документы нечитаемы, CID не совпадает"
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-rose-500/40 text-white text-xs focus:outline-none focus:border-rose-400"
+                        />
+                        {reviewError && (
+                          <div className="p-2 rounded-lg bg-rose-950/70 border border-rose-500/40 text-rose-300 text-[11px]">
+                            {reviewError}
+                          </div>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleRejectApplication}
+                            disabled={reviewBusy}
+                            className="flex-1 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold cursor-pointer"
+                          >
+                            {reviewBusy ? 'Обработка...' : 'Подтвердить отказ'}
+                          </button>
+                          <button
+                            onClick={cancelReview}
+                            className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-400 hover:text-white cursor-pointer"
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

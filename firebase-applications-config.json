@@ -1,0 +1,9 @@
+{
+  "projectId": "apathy-applications",
+  "appId": "1:690564876879:web:f5acb60ede4134d51b383a",
+  "apiKey": "AIzaSyBqNhmbWvLJ-zAB4JPUWuyhEr6IAjn-7mE",
+  "authDomain": "apathy-applications.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "apathy-applications.firebasestorage.app",
+  "messagingSenderId": "690564876879"
+}
