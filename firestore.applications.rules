@@ -37,9 +37,11 @@ service cloud.firestore {
           'id', 'nick', 'cid', 'phone', 'discord', 'docs',
           'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
         ]) &&
+        // publicCode опционально: у заявок, отправленных до появления кодов, его нет.
         data.keys().hasOnly([
           'id', 'nick', 'cid', 'phone', 'discord', 'docs',
-          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId',
+          'publicCode'
         ]) &&
         isValidId(data.id) &&
         data.nick is string && data.nick.size() >= 2 && data.nick.size() <= 64 &&
@@ -55,7 +57,9 @@ service cloud.firestore {
         data.reviewedAt is string && data.reviewedAt.size() <= 64 &&
         data.reviewerNotes is string && data.reviewerNotes.size() <= 500 &&
         data.createdProfileId is string && data.createdProfileId.size() <= 128 &&
-        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$'));
+        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$')) &&
+        (!data.keys().hasAny(['publicCode']) ||
+          (data.publicCode is string && data.publicCode.size() == 9 && data.publicCode.matches('^AP-[A-Z0-9]{6}$')));
     }
 
     // Bootstrap anchor: ac writes this single well-known doc once so isRootOwnerSeeded() becomes

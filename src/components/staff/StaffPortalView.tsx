@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { useDatabase } from '../../context/DatabaseContext';
+import { collection, doc, getDoc, getDocs, type Firestore } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { applicationsDb } from '../../lib/applicationsFirebase';
 import {
   User,
   Truck,
@@ -14,6 +17,7 @@ import {
   RefreshCw,
   LogOut,
   Layers,
+  Download,
 } from 'lucide-react';
 import { ROLE_DEFINITIONS } from '../../types/database';
 import { StaffProfileView } from './StaffProfileView';
@@ -52,6 +56,68 @@ export const StaffPortalView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<StaffTab>('analytics');
   const [showNotifMenu, setShowNotifMenu] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+
+  // Полный JSON-дамп всех коллекций обеих баз (штатной и заявок). Только для Владельца.
+  const downloadBackup = async () => {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    try {
+      const fetchAll = async (database: Firestore, name: string) => {
+        const snap = await getDocs(collection(database, name));
+        return snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+      };
+      const [
+        staff_profiles,
+        corp_state_main,
+        fleet,
+        hall_of_fame,
+        bonus_reports,
+        audit_logs,
+        auth_hashes,
+        staff_secrets,
+        applications,
+      ] = await Promise.all([
+        fetchAll(db, 'staff_profiles'),
+        getDoc(doc(db, 'corp_state', 'main')).then((s) => (s.exists() ? s.data() : null)),
+        fetchAll(db, 'fleet'),
+        fetchAll(db, 'hall_of_fame'),
+        fetchAll(db, 'bonus_reports'),
+        fetchAll(db, 'audit_logs'),
+        fetchAll(db, 'auth_hashes'),
+        fetchAll(db, 'staff_secrets'),
+        fetchAll(applicationsDb, 'applications'),
+      ]);
+
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        exportedBy: currentUser?.displayName || 'unknown',
+        corp_state_main,
+        collections: {
+          staff_profiles,
+          fleet,
+          hall_of_fame,
+          bonus_reports,
+          audit_logs,
+          auth_hashes,
+          staff_secrets,
+          applications,
+        },
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `apathy-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Backup failed:', err);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   const role = currentUser?.role || 'employee';
   const roleInfo = currentUser ? ROLE_DEFINITIONS[role] : ROLE_DEFINITIONS.employee;
@@ -164,6 +230,18 @@ export const StaffPortalView: React.FC = () => {
 
         {/* Right: Tools, Notifications, User Badge & Logout */}
         <div className="flex items-center gap-2.5">
+          {isOwner && (
+            <button
+              onClick={downloadBackup}
+              disabled={backupBusy}
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono-custom bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 transition-all cursor-pointer disabled:opacity-50"
+              title="Скачать JSON-бэкап всех баз корпорации (только для Владельца)"
+            >
+              <Download className={`w-3.5 h-3.5 ${backupBusy ? 'animate-pulse' : ''}`} />
+              <span className="text-[11px] font-bold">{backupBusy ? 'Выгрузка…' : 'Скачать бэкап'}</span>
+            </button>
+          )}
+
           {isOwner && (
             <button
               onClick={openArchitectureModal}

@@ -1,10 +1,17 @@
 import React, { useState } from 'react';
 import { useDatabase } from '../../context/DatabaseContext';
-import { Truck, Fuel, Plus, Trash2, Lock, CheckCircle2 } from 'lucide-react';
-import { ROLE_DEFINITIONS, VehicleStatus } from '../../types/database';
+import { Truck, Fuel, Plus, Trash2, Lock, CheckCircle2, Eye, Image as ImageIcon } from 'lucide-react';
+import { ROLE_DEFINITIONS, VehicleItem, VehicleStatus } from '../../types/database';
 
 export const StaffFleetManager: React.FC = () => {
-  const { fleet, updateVehicleStatus, addVehicle, deleteVehicle, currentUser } = useDatabase();
+  const {
+    fleet,
+    updateVehicleStatus,
+    updateVehiclePublicFields,
+    addVehicle,
+    deleteVehicle,
+    currentUser,
+  } = useDatabase();
 
   const userRole = currentUser?.role || 'employee';
   const canEdit = ROLE_DEFINITIONS[userRole].permissions.canEditFleet;
@@ -15,8 +22,54 @@ export const StaffFleetManager: React.FC = () => {
   const [newTrunk, setNewTrunk] = useState('1500');
   const [newSlot, setNewSlot] = useState('Слот 1');
   const [newRankReq, setNewRankReq] = useState('Ранг [01]+');
+  const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
 
   const statuses: VehicleStatus[] = ['Готов к выезду', 'Ремонт', 'Зарезервирован'];
+
+  // Firestore doc limit is 1MB, so the photo is downscaled and re-encoded as JPEG
+  // until the base64 payload fits well below that.
+  const compressImage = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const scale = Math.min(1, 1000 / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        URL.revokeObjectURL(url);
+        if (!ctx) {
+          reject(new Error('canvas unavailable'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Firestore ограничивает документ 1 МБ, а base64 хранится как есть (символ = байт),
+        // поэтому считаем именно длину строки.
+        let quality = 0.82;
+        let out = canvas.toDataURL('image/jpeg', quality);
+        while (out.length > 900_000 && quality > 0.4) {
+          quality -= 0.12;
+          out = canvas.toDataURL('image/jpeg', quality);
+        }
+        resolve(out);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('bad image'));
+      };
+      img.src = url;
+    });
+
+  const handleImagePick = async (veh: VehicleItem, file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    try {
+      const dataUrl = await compressImage(file);
+      updateVehiclePublicFields(veh.id, { publicImage: dataUrl });
+    } catch {
+      /* неподходящий файл — просто игнорируем */
+    }
+  };
 
   const handleCreateVehicle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +101,7 @@ export const StaffFleetManager: React.FC = () => {
             Диспетчерская и Управление Автопарком
           </h2>
           <p className="text-xs text-zinc-400 mt-1">
-            Добавленные сюда машины автоматически появляются в списке выбора закреплённого транспорта в профилях сотрудников.
+            Добавленные сюда машины автоматически появляются в списке выбора закреплённого транспорта в профилях сотрудников, а карточки с включённым тумблером публикуются на сайте корпорации (там же используется загруженное фото и описание).
           </p>
         </div>
 
@@ -202,6 +255,76 @@ export const StaffFleetManager: React.FC = () => {
                     <span className="text-zinc-200 font-bold">{veh.fuelPercent}%</span>
                   </div>
                 </div>
+
+                {canEdit && (
+                  <div className="space-y-2 mb-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-400 font-mono-custom">
+                        Показывать на публичном сайте:
+                      </span>
+                      <button
+                        onClick={() =>
+                          updateVehiclePublicFields(veh.id, { publicVisible: !(veh.publicVisible !== false) })
+                        }
+                        className={`px-2 py-1 rounded-lg text-[10px] font-mono-custom transition-all cursor-pointer flex items-center gap-1 ${
+                          veh.publicVisible !== false
+                            ? 'bg-emerald-500 text-black font-bold'
+                            : 'bg-white/5 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {veh.publicVisible !== false ? (
+                          <>
+                            <Eye className="w-3 h-3" /> Да
+                          </>
+                        ) : (
+                          'Нет'
+                        )}
+                      </button>
+                    </div>
+
+                    {veh.publicImage ? (
+                      <div className="relative rounded-xl overflow-hidden border border-white/10">
+                        <img src={veh.publicImage} alt={veh.modelName} className="w-full h-28 object-cover" />
+                        <button
+                          onClick={() => updateVehiclePublicFields(veh.id, { publicImage: '' })}
+                          className="absolute top-1.5 right-1.5 p-1 rounded-lg bg-black/70 text-rose-300 hover:text-rose-200 transition-colors cursor-pointer"
+                          title="Убрать фото"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-white/15 text-[11px] font-mono-custom text-zinc-400 hover:text-white hover:border-cyan-500/40 transition-all cursor-pointer">
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Загрузить фото для публички
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleImagePick(veh, f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    )}
+
+                    <input
+                      type="text"
+                      value={descDrafts[veh.id] ?? veh.publicDesc ?? ''}
+                      onChange={(e) => setDescDrafts((prev) => ({ ...prev, [veh.id]: e.target.value }))}
+                      onBlur={(e) => {
+                        const val = e.target.value.trim();
+                        if (val !== (veh.publicDesc || '')) {
+                          updateVehiclePublicFields(veh.id, { publicDesc: val });
+                        }
+                      }}
+                      placeholder="Своё описание для публички (необязательно)"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-black border border-white/10 text-[11px] text-white placeholder-zinc-600"
+                    />
+                  </div>
+                )}
               </div>
 
               {canEdit ? (

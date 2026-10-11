@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   collection,
   doc,
@@ -165,6 +165,10 @@ interface DatabaseContextType {
   adjustTreasury: (deltaAmount: number, reason: string) => Promise<void>;
   updateHallOfFameWinner: (entryId: string, updates: Partial<HallOfFameEntry>) => Promise<void>;
   updateVehicleStatus: (vehicleId: string, status: VehicleStatus) => Promise<void>;
+  updateVehiclePublicFields: (
+    vehicleId: string,
+    updates: { publicVisible?: boolean; publicImage?: string; publicDesc?: string }
+  ) => Promise<void>;
   addVehicle: (newVehicle: Omit<VehicleItem, 'id'>) => Promise<void>;
   deleteVehicle: (vehicleId: string) => Promise<void>;
 
@@ -181,6 +185,11 @@ const SESSION_KEY = 'apathy_corp_session_v9';
 
 export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isCloudConnected, setIsCloudConnected] = useState(false);
+
+  // Set once the first real cloud snapshots arrive; public_stats mirroring waits for them
+  // so seeded local defaults never overwrite real numbers in the public document.
+  const corpStateLoadedRef = React.useRef(false);
+  const profilesLoadedRef = React.useRef(false);
 
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
   const [secretsMap, setSecretsMap] = useState<
@@ -374,6 +383,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       qProfiles,
       (snap) => {
         setIsCloudConnected(true);
+        profilesLoadedRef.current = true;
         const docsData = snap.docs.map((d) => d.data());
         if (docsData.length > 0) {
           setUsers((prevUsers) => {
@@ -405,6 +415,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       doc(db, 'corp_state', 'main'),
       (docSnap) => {
         if (docSnap.exists()) {
+          corpStateLoadedRef.current = true;
           const d = docSnap.data();
           setFinancials({
             treasuryBalance: Number(d.treasuryBalance) || 0,
@@ -445,6 +456,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             status: data.status as VehicleStatus,
             fuelPercent: Number(data.fuelPercent) || 100,
             plate: String(data.plate),
+            publicVisible: data.publicVisible !== false,
+            publicImage: String(data.publicImage || ''),
+            publicDesc: String(data.publicDesc || ''),
           };
         });
         setFleet(items);
@@ -653,11 +667,15 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     if (!heartbeatProfileId) return;
     const beat = () => {
+      const nowIso = new Date().toISOString();
       updateDoc(doc(db, 'staff_profiles', heartbeatProfileId), {
-        lastActive: new Date().toISOString(),
+        lastActive: nowIso,
       }).catch(() => {
         // one lost beat only costs one presence window
       });
+      // Public-safe presence beacon: the public site counts these docs for "Сейчас в сети".
+      // Doc ID is the opaque profile id, no nicknames or personal data inside.
+      setDoc(doc(db, 'public_presence', heartbeatProfileId), { at: nowIso }).catch(() => {});
     };
     beat();
     const timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
@@ -668,6 +686,19 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const timer = setInterval(() => setPresenceNow(Date.now()), PRESENCE_HEARTBEAT_MS);
     return () => clearInterval(timer);
   }, []);
+
+  // Mirror of public-safe numbers for Apathy-Corp-Public (block «Корпорация в цифрах»).
+  useEffect(() => {
+    if (!isCloudConnected || !currentUser) return;
+    if (!corpStateLoadedRef.current || !profilesLoadedRef.current) return;
+    const mined = financials.totalMined;
+    setDoc(doc(db, 'public_stats', 'main'), {
+      treasuryBalance: financials.treasuryBalance,
+      totalMinedItems: mined.rock + mined.wood + mined.blueFlower + mined.redFlower + mined.pinkFlower,
+      staffTotal: users.length,
+      updatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }, [financials, users, isCloudConnected, currentUser]);
 
   // Load isolated secrets by computed vault ID for current user (and all users if Owner/Admin)
   useEffect(() => {
@@ -1378,6 +1409,41 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
+  // Авто-топ-3: сортирует всех по заработку и перезаписывает hall_of_fame детерминированными
+  // id (place-1..3). Легаси-доки (hof-1..3 из сид-данных) удаляются, чтобы публичка читала
+  // ровно один актуальный состав лидеров.
+  const syncHallOfFameAuto = async (nextUsers: UserProfile[]) => {
+    const ranked = [...nextUsers].sort(
+      (a, b) => (b.farmStats?.totalEarned || 0) - (a.farmStats?.totalEarned || 0)
+    );
+
+    const nextBoard: HallOfFameEntry[] = ([1, 2, 3] as const).map((place) => {
+      const u = ranked[place - 1];
+      const fs = u?.farmStats;
+      return {
+        id: `place-${place}`,
+        place,
+        nickname: u ? u.displayName.slice(0, 64) : 'none',
+        cid: u ? (u.cid || '-').slice(0, 32) : '-',
+        rankTitle: u ? `${u.rankName} [${u.rankNumber}]`.slice(0, 64) : '-',
+        totalMined: fs ? fs.rock + fs.wood + fs.blueFlower + fs.redFlower + fs.pinkFlower : 0,
+        bonusReward: fs ? Math.max(0, fs.totalEarned) : 0,
+      };
+    });
+
+    const legacyIds = hallOfFame.filter((h) => !h.id.startsWith('place-')).map((h) => h.id);
+
+    try {
+      await Promise.all([
+        ...nextBoard.map((entry) => setDoc(doc(db, 'hall_of_fame', entry.id), entry)),
+        ...legacyIds.map((legacyId) => deleteDoc(doc(db, 'hall_of_fame', legacyId))),
+      ]);
+      setHallOfFame(nextBoard);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'hall_of_fame');
+    }
+  };
+
   const recordFarmSubmission = async (
     userId: string,
     items: {
@@ -1436,6 +1502,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       await saveFullStaffProfileDoc(updatedUser);
       await saveFullCorpStateDoc(updatedFin);
+      await syncHallOfFameAuto(users.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
 
       await addAuditLog(
         'farm',
@@ -1486,6 +1553,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     try {
       await saveFullStaffProfileDoc(updatedUser);
+      await syncHallOfFameAuto(users.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
       await addAuditLog(
         'farm',
         'Корректировка добычи сотрудника',
@@ -1868,6 +1936,23 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const updateVehiclePublicFields = async (
+    vehicleId: string,
+    updates: { publicVisible?: boolean; publicImage?: string; publicDesc?: string }
+  ) => {
+    const target = fleet.find((v) => v.id === vehicleId);
+    if (!target) return;
+
+    const nextVeh: VehicleItem = { ...target, ...updates };
+
+    try {
+      await setDoc(doc(db, 'fleet', vehicleId), nextVeh);
+      await addAuditLog('fleet', 'Публичная карточка авто', `${target.modelName} [${target.plate}]`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fleet/${vehicleId}`);
+    }
+  };
+
   const addVehicle = async (newVehicle: Omit<VehicleItem, 'id'>) => {
     const vehId = `veh-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     const item: VehicleItem = {
@@ -1880,6 +1965,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       status: newVehicle.status,
       fuelPercent: Math.min(100, Math.max(0, newVehicle.fuelPercent)),
       plate: newVehicle.plate.slice(0, 32),
+      publicVisible: true,
+      publicImage: '',
+      publicDesc: '',
     };
 
     try {
@@ -1961,6 +2049,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         adjustTreasury,
         updateHallOfFameWinner,
         updateVehicleStatus,
+        updateVehiclePublicFields,
         addVehicle,
         deleteVehicle,
         markNotificationAsRead,

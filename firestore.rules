@@ -108,11 +108,13 @@ service cloud.firestore {
     function isValidVehicleItem(data) {
       return data.keys().hasAll([
           'id', 'modelName', 'category', 'trunkKg',
-          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate'
+          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate',
+          'publicVisible', 'publicImage', 'publicDesc'
         ]) &&
         data.keys().hasOnly([
           'id', 'modelName', 'category', 'trunkKg',
-          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate'
+          'rankRequired', 'slot', 'status', 'fuelPercent', 'plate',
+          'publicVisible', 'publicImage', 'publicDesc'
         ]) &&
         data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
         data.modelName is string && data.modelName.size() >= 1 && data.modelName.size() <= 80 &&
@@ -123,7 +125,12 @@ service cloud.firestore {
         data.status is string && data.status.size() <= 32 &&
         (data.status == 'Готов к выезду' || data.status == 'В рейсе' || data.status == 'Ремонт' || data.status == 'Зарезервирован' || data.status == 'Дежурство СБ') &&
         data.fuelPercent is number && data.fuelPercent >= 0 && data.fuelPercent <= 100 &&
-        data.plate is string && data.plate.size() >= 1 && data.plate.size() <= 32;
+        data.plate is string && data.plate.size() >= 1 && data.plate.size() <= 32 &&
+        data.publicVisible is bool &&
+        // Карточка авто для публички: data-URL сжимается порталом до ~900 КБ.
+        data.publicImage is string && data.publicImage.size() <= 950000 &&
+        (data.publicImage == '' || data.publicImage.matches('^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$')) &&
+        data.publicDesc is string && data.publicDesc.size() <= 500;
     }
 
     function isValidHallOfFameEntry(data) {
@@ -174,9 +181,11 @@ service cloud.firestore {
           'id', 'nick', 'cid', 'phone', 'discord', 'docs',
           'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
         ]) &&
+        // publicCode опционально: у заявок, отправленных до появления кодов, его нет.
         data.keys().hasOnly([
           'id', 'nick', 'cid', 'phone', 'discord', 'docs',
-          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId'
+          'status', 'submittedAt', 'source', 'reviewedAt', 'reviewerNotes', 'createdProfileId',
+          'publicCode'
         ]) &&
         isValidId(data.id) &&
         data.nick is string && data.nick.size() >= 2 && data.nick.size() <= 64 &&
@@ -192,7 +201,9 @@ service cloud.firestore {
         data.reviewedAt is string && data.reviewedAt.size() <= 64 &&
         data.reviewerNotes is string && data.reviewerNotes.size() <= 500 &&
         data.createdProfileId is string && data.createdProfileId.size() <= 128 &&
-        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$'));
+        (data.createdProfileId == '' || data.createdProfileId.matches('^[a-zA-Z0-9_\\-]+$')) &&
+        (!data.keys().hasAny(['publicCode']) ||
+          (data.publicCode is string && data.publicCode.size() == 9 && data.publicCode.matches('^AP-[A-Z0-9]{6}$')));
     }
 
     function isValidAuditLogItem(data) {
@@ -287,7 +298,7 @@ service cloud.firestore {
       allow update: if isValidId(vehicleId) && isValidVehicleItem(incoming()) &&
         incoming().id == existing().id &&
         isRootOwnerSeeded() &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['modelName', 'category', 'trunkKg', 'rankRequired', 'slot', 'status', 'fuelPercent', 'plate']);
+        incoming().diff(existing()).affectedKeys().hasOnly(['modelName', 'category', 'trunkKg', 'rankRequired', 'slot', 'status', 'fuelPercent', 'plate', 'publicVisible', 'publicImage', 'publicDesc']);
       allow delete: if isValidId(vehicleId) && isRootOwnerSeeded();
     }
 
@@ -301,7 +312,7 @@ service cloud.firestore {
         incoming().place == existing().place &&
         isRootOwnerSeeded() &&
         incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'cid', 'rankTitle', 'totalMined', 'bonusReward']);
-      allow delete: if false;
+      allow delete: if isRootOwnerSeeded();
     }
 
     // Collection 7: /bonus_reports/{reportId}
@@ -334,8 +345,7 @@ service cloud.firestore {
 
     // Collection 9: /applications/{appId}
     // Applicant forms pushed by the public portal (Apathy-Corp-Public) and reviewed in the staff portal.
-    match /applications/{appId} {
-      allow get: if isValidId(appId) && existing().id == appId && isRootOwnerSeeded();
+    match /applications/{appId} {      allow get: if isValidId(appId) && existing().id == appId && isRootOwnerSeeded();
       allow list: if existing().id == appId && isRootOwnerSeeded();
 
       // Public write: pending form only, no review fields.
@@ -362,6 +372,31 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedAt', 'reviewerNotes', 'createdProfileId']);
 
       allow delete: if false;
+    }
+
+    // Collection 10: /public_stats/main
+    // Зеркало публичных цифр («Корпорация в цифрах» на сайте). Читает кто угодно,
+    // пишет только портал (без авторизации — модель как у остальных коллекций).
+    match /public_stats/{statsId} {
+      allow get, list: if isValidId(statsId);
+      allow create, update: if isValidId(statsId) &&
+        incoming().keys().hasOnly(['treasuryBalance', 'totalMinedItems', 'staffTotal', 'updatedAt']) &&
+        incoming().treasuryBalance is number && incoming().treasuryBalance >= 0 &&
+        incoming().totalMinedItems is number && incoming().totalMinedItems >= 0 &&
+        incoming().staffTotal is number && incoming().staffTotal >= 0 &&
+        incoming().updatedAt is string && incoming().updatedAt.size() <= 64;
+      allow delete: if false;
+    }
+
+    // Collection 11: /public_presence/{profileId}
+    // Биконы онлайн-счётчика: {at: ISO}. Id — внутренний id профиля, без PII.
+    // TTL-фильтр делает счётчик самозатухающим: старые биконы просто перестают попадать в выборку.
+    match /public_presence/{presenceId} {
+      allow get, list: if isValidId(presenceId);
+      allow create, update: if isValidId(presenceId) &&
+        incoming().keys().hasOnly(['at']) &&
+        incoming().at is string && incoming().at.size() <= 64;
+      allow delete: if isValidId(presenceId);
     }
   }
 }
