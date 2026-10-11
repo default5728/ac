@@ -16,7 +16,7 @@ export const StaffFleetManager: React.FC = () => {
   const [newSlot, setNewSlot] = useState('Слот 1');
   const [newRankReq, setNewRankReq] = useState('Ранг [01]+');
 
-  const statuses: VehicleStatus[] = ['Готов к выезду', 'В рейсе', 'Ремонт', 'Зарезервирован'];
+  const statuses: VehicleStatus[] = ['Готов к выезду', 'Ремонт', 'Зарезервирован'];
 
   const handleCreateVehicle = (e: React.FormEvent) => {
     e.preventDefault();
@@ -223,16 +223,6 @@ export const StaffFleetManager: React.FC = () => {
                         {st}
                       </button>
                     ))}
-                  </div>
-
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      onClick={() => updateVehicleStatus(veh.id, veh.status, 100)}
-                      className="flex-1 py-1 rounded bg-amber-950/60 hover:bg-amber-900 border border-amber-500/30 text-amber-300 text-[10px] font-mono-custom flex items-center justify-center gap-1 cursor-pointer"
-                    >
-                      <Fuel className="w-3 h-3" />
-                      Заправить до 100%
-                    </button>
                   </div>
                 </div>
               ) : (

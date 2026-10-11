@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useDatabase } from '../../context/DatabaseContext';
 import { User, Save, CheckCircle2, Lock, Truck, FileText } from 'lucide-react';
-import { ShiftStatus, ROLE_DEFINITIONS } from '../../types/database';
+import { ROLE_DEFINITIONS, isProfileOnline } from '../../types/database';
 
 export const StaffProfileView: React.FC = () => {
   const {
@@ -9,7 +9,7 @@ export const StaffProfileView: React.FC = () => {
     fleet,
     updateUserProfile,
     updateStaffVehicleAndNotes,
-    updateUserShiftStatus,
+    presenceNow,
   } = useDatabase();
 
   if (!currentUser) return null;
@@ -47,9 +47,7 @@ export const StaffProfileView: React.FC = () => {
     setTimeout(() => setProfileSavedNotice(false), 3000);
   };
 
-  const handleStatusChange = (status: ShiftStatus) => {
-    updateUserShiftStatus(currentUser.id, status);
-  };
+  const isOnline = isProfileOnline(currentUser.lastActive, currentUser.status, presenceNow);
 
   const totalFlowers =
     (currentUser.farmStats?.blueFlower || 0) +
@@ -78,27 +76,16 @@ export const StaffProfileView: React.FC = () => {
           </div>
         </div>
 
-        {/* Shift status buttons */}
+        {/* Presence follows the live session, it is not a switch an employee can flip */}
         <div className="flex items-center gap-2 bg-black/40 p-1.5 rounded-xl border border-white/5">
-          <span className="text-[10px] text-zinc-500 font-mono-custom px-2 uppercase">Смена:</span>
-          {(
-            [
-              { id: 'on_shift', label: 'На смене', color: 'bg-emerald-500 text-black font-bold' },
-              { id: 'off_duty', label: 'Отдых', color: 'bg-zinc-700 text-white' },
-            ] as const
-          ).map((st) => (
-            <button
-              key={st.id}
-              onClick={() => handleStatusChange(st.id)}
-              className={`px-3 py-1 rounded-lg text-xs font-mono-custom transition-all cursor-pointer ${
-                currentUser.status === st.id
-                  ? st.color
-                  : 'text-zinc-400 hover:text-white hover:bg-white/5'
-              }`}
-            >
-              {st.label}
-            </button>
-          ))}
+          <span className="text-[10px] text-zinc-500 font-mono-custom px-2 uppercase">Статус:</span>
+          <span
+            className={`px-3 py-1 rounded-lg text-xs font-mono-custom font-bold ${
+              isOnline ? 'bg-emerald-500 text-black' : 'bg-zinc-800 text-zinc-400'
+            }`}
+          >
+            {isOnline ? '● В сети' : '○ Не в сети'}
+          </span>
         </div>
       </div>
 

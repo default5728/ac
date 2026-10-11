@@ -36,6 +36,8 @@ import {
   BonusReportStatus,
   CandidateApplication,
   ApplicationStatus,
+  isProfileOnline,
+  PRESENCE_HEARTBEAT_MS,
 } from '../types/database';
 import {
   INITIAL_USERS,
@@ -73,6 +75,8 @@ interface DatabaseContextType {
   currentRole: UserRole | null;
   lastSyncedAt: Date;
   syncEventCount: number;
+  /** Advances on a timer so presence badges expire even when the cloud is silent. */
+  presenceNow: number;
 
   // Modals & Navigation
   isArchitectureModalOpen: boolean;
@@ -106,7 +110,7 @@ interface DatabaseContextType {
     }
   ) => Promise<void>;
   deleteUser: (userId: string) => Promise<void>;
-  logoutStaff: () => void;
+  logoutStaff: () => Promise<void>;
 
   // Recruitment: applications submitted on the public portal
   approveCandidateApplication: (
@@ -157,11 +161,10 @@ interface DatabaseContextType {
 
   // Profile, Analytics, Treasury, Fleet, Hall of Fame
   updateUserProfile: (userId: string, updates: Partial<UserProfile>) => Promise<void>;
-  updateUserShiftStatus: (userId: string, status: ShiftStatus) => Promise<void>;
   updateFinancialsData: (updates: Partial<CorporationFinancials>) => Promise<void>;
   adjustTreasury: (deltaAmount: number, reason: string) => Promise<void>;
   updateHallOfFameWinner: (entryId: string, updates: Partial<HallOfFameEntry>) => Promise<void>;
-  updateVehicleStatus: (vehicleId: string, status: VehicleStatus, fuelPercent?: number) => Promise<void>;
+  updateVehicleStatus: (vehicleId: string, status: VehicleStatus) => Promise<void>;
   addVehicle: (newVehicle: Omit<VehicleItem, 'id'>) => Promise<void>;
   deleteVehicle: (vehicleId: string) => Promise<void>;
 
@@ -207,6 +210,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isArchitectureModalOpen, setIsArchitectureModalOpen] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date>(new Date());
   const [syncEventCount, setSyncEventCount] = useState<number>(0);
+  const [presenceNow, setPresenceNow] = useState<number>(() => Date.now());
 
   const triggerSyncPulse = useCallback(() => {
     setLastSyncedAt(new Date());
@@ -254,10 +258,17 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           totalEarned: Number(data.totalEarned) || 0,
         },
         assignedVehicle: String(data.assignedVehicle || '-'),
-        status: (data.status as ShiftStatus) || 'off_duty',
+        // status is derived from the heartbeat, so every consumer reads presence rather than the
+        // manual switch a stale row may still carry.
+        lastActive: String(data.lastActive || ''),
+        status: isProfileOnline(
+          String(data.lastActive || ''),
+          (data.status as ShiftStatus) || 'off_duty'
+        )
+          ? 'on_shift'
+          : 'off_duty',
         bioNotes: String(data.bioNotes || ''),
         joinedAt: String(data.joinedAt || ''),
-        lastActive: String(data.lastActive || 'Онлайн'),
       };
     },
     []
@@ -588,7 +599,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             triggerSyncPulse();
           },
           (err) => {
-                console.error('Applications listener:', err);
+            // Log only: handleFirestoreError() throws, and an error callback that throws turns a
+            // recoverable "queue not readable yet" into an uncaught error in the portal.
+            console.error('Applications listener:', err);
           }
         );
       });
@@ -604,7 +617,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!currentUser) return;
     const updated = users.find((u) => u.id === currentUser.id);
     const latestSec = secretsMap[currentUser.id] || secretsMapRef.current[currentUser.id];
-        if (updated) {
+    if (updated) {
       setCurrentUser((prev) => {
         if (!prev) return null;
         return {
@@ -633,6 +646,28 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       );
     }
   }, [users, secretsMap, currentUser?.id, isCloudConnected]);
+
+  // Presence heartbeat: an open session stamps its own profile, which is what "В сети" means.
+  // Chrome throttles background timers to ~1/min, still inside PRESENCE_TTL_MS.
+  const heartbeatProfileId = currentUser?.id || '';
+  useEffect(() => {
+    if (!heartbeatProfileId) return;
+    const beat = () => {
+      updateDoc(doc(db, 'staff_profiles', heartbeatProfileId), {
+        lastActive: new Date().toISOString(),
+      }).catch(() => {
+        // one lost beat only costs one presence window
+      });
+    };
+    beat();
+    const timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [heartbeatProfileId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setPresenceNow(Date.now()), PRESENCE_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load isolated secrets by computed vault ID for current user (and all users if Owner/Admin)
   useEffect(() => {
@@ -811,16 +846,23 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       const loggedInUser = mapDocToUserProfile(profileData, savedSecret);
 
-      // Update lastActive in Firestore
+      // Presence starts here: this client keeps stamping lastActive while the tab is open.
+      const seenAt = new Date().toISOString();
       try {
         await updateDoc(doc(db, 'staff_profiles', profileId), {
-          lastActive: 'Онлайн',
+          status: 'on_shift',
+          lastActive: seenAt,
+        });
+        await updateDoc(doc(db, 'corp_state', 'main'), {
+          activeWorkersCount: users.filter((u) =>
+            u.id === profileId ? true : u.status === 'on_shift'
+          ).length,
         });
       } catch {
         // non-blocking
       }
 
-      setCurrentUser({ ...loggedInUser, lastActive: 'Онлайн' });
+      setCurrentUser({ ...loggedInUser, lastActive: seenAt, status: 'on_shift' });
       addNotification(
         'Успешный вход (Cloud Sync)',
         `Сотрудник ${loggedInUser.displayName} авторизован. Роль: ${ROLE_DEFINITIONS[loggedInUser.role].title}`,
@@ -1275,10 +1317,24 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const logoutStaff = () => {
-    if (currentUser) {
-      addAuditLog('users', 'Выход из системы', `${currentUser.displayName} вышел из сессии`);
+  const logoutStaff = async () => {
+    if (!currentUser) return;
+
+    addAuditLog('users', 'Выход из системы', `${currentUser.displayName} вышел из сессии`);
+    try {
+      await updateDoc(doc(db, 'staff_profiles', currentUser.id), {
+        status: 'off_duty',
+        lastActive: new Date().toISOString(),
+      });
+      await updateDoc(doc(db, 'corp_state', 'main'), {
+        activeWorkersCount: users.filter(
+          (u) => u.status === 'on_shift' && u.id !== currentUser.id
+        ).length,
+      });
+    } catch {
+      // A dropped write only delays the badge: the heartbeat stops, so presence expires anyway.
     }
+
     setCurrentUser(null);
   };
 
@@ -1721,39 +1777,6 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const updateUserShiftStatus = async (userId: string, status: ShiftStatus) => {
-    const target = users.find((u) => u.id === userId);
-    if (!target) return;
-
-    try {
-      await updateDoc(doc(db, 'staff_profiles', userId), {
-        status,
-        lastActive: 'Онлайн',
-      });
-
-      const nextOnShiftCount = users.filter((u) =>
-        u.id === userId ? status === 'on_shift' : u.status === 'on_shift'
-      ).length;
-
-      await updateDoc(doc(db, 'corp_state', 'main'), {
-        activeWorkersCount: nextOnShiftCount,
-      });
-
-      await addAuditLog(
-        'profile',
-        'Статус смены',
-        `${target.displayName} перешел в «${status === 'on_shift' ? 'На смене' : 'Отдых'}»`
-      );
-      addNotification(
-        'Статус смены',
-        `${target.displayName} теперь «${status === 'on_shift' ? 'На смене' : 'Отдых'}»`,
-        'info'
-      );
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
-    }
-  };
-
   const updateFinancialsData = async (updates: Partial<CorporationFinancials>) => {
     if (!currentUser) return;
     if (!ROLE_DEFINITIONS[currentUser.role].permissions.canEditAnalytics) return;
@@ -1831,19 +1854,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const updateVehicleStatus = async (
-    vehicleId: string,
-    status: VehicleStatus,
-    fuelPercent?: number
-  ) => {
+  const updateVehicleStatus = async (vehicleId: string, status: VehicleStatus) => {
     const target = fleet.find((v) => v.id === vehicleId);
     if (!target) return;
 
-    const nextVeh: VehicleItem = {
-      ...target,
-      status,
-      ...(fuelPercent !== undefined ? { fuelPercent: Math.min(100, Math.max(0, fuelPercent)) } : {}),
-    };
+    const nextVeh: VehicleItem = { ...target, status };
 
     try {
       await setDoc(doc(db, 'fleet', vehicleId), nextVeh);
@@ -1924,6 +1939,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         currentRole: currentUser?.role || null,
         lastSyncedAt,
         syncEventCount,
+        presenceNow,
         isArchitectureModalOpen,
         openArchitectureModal: () => setIsArchitectureModalOpen(true),
         closeArchitectureModal: () => setIsArchitectureModalOpen(false),
@@ -1941,7 +1957,6 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         reviewBonusReport,
         deleteBonusReport,
         updateUserProfile,
-        updateUserShiftStatus,
         updateFinancialsData,
         adjustTreasury,
         updateHallOfFameWinner,

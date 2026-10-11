@@ -129,6 +129,27 @@ export const RESOURCE_PRICES = {
 
 export type ShiftStatus = 'on_shift' | 'off_duty';
 
+/** How long a session heartbeat keeps a profile marked as online. */
+export const PRESENCE_TTL_MS = 120000;
+
+/** How often a logged-in client refreshes its heartbeat. */
+export const PRESENCE_HEARTBEAT_MS = 30000;
+
+/**
+ * Presence, not a manual switch: a profile is online only while its own client keeps stamping
+ * `lastActive` (ISO timestamp) and it logged out cleanly otherwise. Legacy rows store plain words
+ * like 'Онлайн' in that field, which parse to NaN and therefore read as offline.
+ */
+export function isProfileOnline(
+  lastActive: string,
+  status: ShiftStatus,
+  now: number = Date.now()
+): boolean {
+  if (status !== 'on_shift') return false;
+  const seenAt = Date.parse(lastActive);
+  return Number.isFinite(seenAt) && now - seenAt < PRESENCE_TTL_MS;
+}
+
 export interface FarmStats {
   rock: number;
   wood: number;

@@ -11,7 +11,12 @@ import {
   CheckCircle2,
   PlusCircle,
 } from 'lucide-react';
-import { RESOURCE_PRICES, ROLE_DEFINITIONS, UserProfile } from '../../types/database';
+import {
+  RESOURCE_PRICES,
+  ROLE_DEFINITIONS,
+  UserProfile,
+  isProfileOnline,
+} from '../../types/database';
 
 export const StaffAnalyticsView: React.FC = () => {
   const {
@@ -21,6 +26,7 @@ export const StaffAnalyticsView: React.FC = () => {
     updateFinancialsData,
     updateStaffFarmStats,
     recordFarmSubmission,
+    presenceNow,
   } = useDatabase();
 
   const [timeframe, setTimeframe] = useState<'shift' | 'week' | 'all'>('all');
@@ -51,7 +57,9 @@ export const StaffAnalyticsView: React.FC = () => {
   const [staffPink, setStaffPink] = useState('0');
   const [staffWallet, setStaffWallet] = useState('0');
 
-  const onShiftUsers = users.filter((u) => u.status === 'on_shift');
+  const onShiftUsers = users.filter((u) =>
+    isProfileOnline(u.lastActive, u.status, presenceNow)
+  );
   const totalRock = financials.totalMined?.rock || 0;
   const totalWood = financials.totalMined?.wood || 0;
   const totalBlue = financials.totalMined?.blueFlower || 0;
@@ -414,7 +422,7 @@ export const StaffAnalyticsView: React.FC = () => {
 
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10">
           <span className="text-[10px] font-mono-custom text-zinc-400 uppercase">
-            Сотрудников на смене
+            Сотрудников в сети
           </span>
           <div className="text-2xl font-black text-amber-400 mt-1">
             {onShiftUsers.length} чел.
@@ -672,6 +680,7 @@ export const StaffAnalyticsView: React.FC = () => {
                     (u.farmStats?.blueFlower || 0) +
                     (u.farmStats?.redFlower || 0) +
                     (u.farmStats?.pinkFlower || 0);
+                  const online = isProfileOnline(u.lastActive, u.status, presenceNow);
 
                   return (
                     <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
@@ -683,12 +692,12 @@ export const StaffAnalyticsView: React.FC = () => {
                       <td className="py-3">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] ${
-                            u.status === 'on_shift'
+                            online
                               ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30'
                               : 'bg-zinc-800 text-zinc-400'
                           }`}
                         >
-                          {u.status === 'on_shift' ? 'На смене' : 'Отдых'}
+                          {online ? 'В сети' : 'Не в сети'}
                         </span>
                       </td>
                       <td className="py-3 text-zinc-400 text-[11px]">

@@ -22,7 +22,7 @@ import {
   XCircle,
   UserCheck,
 } from 'lucide-react';
-import { ROLE_DEFINITIONS, UserRole, UserProfile } from '../../types/database';
+import { ROLE_DEFINITIONS, UserRole, UserProfile, isProfileOnline } from '../../types/database';
 
 export const StaffHrManager: React.FC = () => {
   const {
@@ -38,6 +38,7 @@ export const StaffHrManager: React.FC = () => {
     updateStaffVehicleAndNotes,
     approveCandidateApplication,
     rejectCandidateApplication,
+    presenceNow,
   } = useDatabase();
 
   const userRole = currentUser?.role || 'employee';
@@ -1099,8 +1100,16 @@ PIN-код: ${createdCredentialsCard.pin}
                       )}
                       <div className="flex justify-between text-zinc-400">
                         <span>Статус:</span>
-                        <span className={u.status === 'on_shift' ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>
-                          {u.status === 'on_shift' ? '● На смене' : '○ Отдых'}
+                        <span
+                          className={
+                            isProfileOnline(u.lastActive, u.status, presenceNow)
+                              ? 'text-emerald-400 font-bold'
+                              : 'text-zinc-500'
+                          }
+                        >
+                          {isProfileOnline(u.lastActive, u.status, presenceNow)
+                            ? '● В сети'
+                            : '○ Не в сети'}
                         </span>
                       </div>
                     </div>
