@@ -857,7 +857,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   ): Promise<{ ok: boolean; error?: string }> => {
     let profilesSnap;
     try {
-      profilesSnap = await getDocs(collection(db, 'staff_profiles'));
+      // Rules require the rankNumber constraint to be part of the query itself
+      // (rules are not filters) — a bare collection list is permission-denied.
+      profilesSnap = await getDocs(
+        query(collection(db, 'staff_profiles'), where('rankNumber', '>=', 1))
+      );
     } catch {
       return { ok: false };
     }
