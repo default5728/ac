@@ -30,6 +30,8 @@ import {
   FarmStats,
   RESOURCE_PRICES,
   ROLE_DEFINITIONS,
+  RANK_LADDER,
+  MAX_RANK,
   ShiftStatus,
   VehicleStatus,
   BonusReport,
@@ -156,7 +158,7 @@ interface DatabaseContextType {
 
   // Bonus Reports (Submitted by any staff, visible & managed by Owner)
   submitBonusReport: (data: { requestedAmount: number; comment: string }) => Promise<void>;
-  reviewBonusReport: (reportId: string, status: BonusReportStatus, payFromTreasury?: boolean) => Promise<void>;
+  reviewBonusReport: (reportId: string, status: BonusReportStatus) => Promise<void>;
   deleteBonusReport: (reportId: string) => Promise<void>;
 
   // Profile, Analytics, Treasury, Fleet, Hall of Fame
@@ -168,6 +170,16 @@ interface DatabaseContextType {
   updateVehiclePublicFields: (
     vehicleId: string,
     updates: { publicVisible?: boolean; publicImage?: string; publicDesc?: string }
+  ) => Promise<void>;
+  updateVehicleFields: (
+    vehicleId: string,
+    updates: {
+      modelName?: string;
+      plate?: string;
+      trunkKg?: number;
+      slot?: string;
+      rankRequired?: string;
+    }
   ) => Promise<void>;
   addVehicle: (newVehicle: Omit<VehicleItem, 'id'>) => Promise<void>;
   deleteVehicle: (vehicleId: string) => Promise<void>;
@@ -968,6 +980,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const joinedAt = new Date().toISOString().slice(0, 10);
     const dept = (newUserData.department || (newUserData.role === 'employee' ? 'Цех добычи' : 'Руководство')).slice(0, 64);
 
+    const nextRankNumber = Math.min(MAX_RANK, Math.max(2, newUserData.rankNumber || rankInfo.num));
+    const nextRankName = (newUserData.rankNumber && RANK_LADDER[nextRankNumber]) || rankInfo.name;
+
     try {
       // 1. Write zero-knowledge lookup record in /auth_hashes/{credHash}
       await setDoc(doc(db, 'auth_hashes', credHash), {
@@ -983,8 +998,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         displayName: nickClean,
         role: newUserData.role,
         cid: cidClean,
-        rankNumber: Math.min(10, Math.max(1, newUserData.rankNumber || rankInfo.num)),
-        rankName: rankInfo.name,
+        rankNumber: nextRankNumber,
+        rankName: nextRankName,
         department: dept,
         walletBalance: 0,
         rock: 0,
@@ -1211,8 +1226,14 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const nextDiscord = (updates.discord ?? currentSec.discord).trim().slice(0, 64);
     const nextPin = (updates.pin ?? currentSec.pin).trim().slice(0, 32);
     const nextRole = updates.role ?? target.role;
-    const nextRankNumber = Math.min(10, Math.max(1, updates.rankNumber ?? target.rankNumber));
-    const nextRankName = (updates.rankName ?? target.rankName).slice(0, 64);
+    const nextRankNumber = Math.min(MAX_RANK, Math.max(2, updates.rankNumber ?? target.rankNumber));
+    // Смена ранга подтягивает название с лестницы, если Владелец не ввёл своё.
+    const nextRankName =
+      (updates.rankName ??
+        (updates.rankNumber !== undefined && updates.rankNumber !== target.rankNumber
+          ? RANK_LADDER[nextRankNumber]
+          : undefined) ??
+        target.rankName).slice(0, 64);
     const nextDepartment = (updates.department ?? target.department).slice(0, 64);
 
     const nextCredHash = computeCredentialHash(
@@ -1341,6 +1362,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       await deleteDoc(doc(db, 'staff_profiles', userId));
       await deleteDoc(doc(db, 'staff_secrets', vaultId));
+      // Доска Почёта не должна хранить удалённого сотрудника: пересобираем ТОП-3 из оставшихся.
+      await syncHallOfFameAuto(users.filter((u) => u.id !== userId));
       await addAuditLog('users', 'Удаление сотрудника', `Удален профиль ${target.displayName} [${target.cid}]`);
       addNotification('Сотрудник удален', `Учетная запись ${target.displayName} удалена из облачной БД.`, 'warning');
     } catch (error) {
@@ -1656,11 +1679,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const reviewBonusReport = async (
-    reportId: string,
-    status: BonusReportStatus,
-    payFromTreasury = false
-  ) => {
+  const reviewBonusReport = async (reportId: string, status: BonusReportStatus) => {
     if (currentUser?.role !== 'owner') return;
     const report = bonusReports.find((r) => r.id === reportId);
     if (!report) return;
@@ -1668,7 +1687,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       await updateDoc(doc(db, 'bonus_reports', reportId), { status });
 
-      if (status === 'approved' && payFromTreasury && report.requestedAmount > 0) {
+      // «Засчитано» — единственное состояние, которое реально проводит деньги:
+      // премия приходит сотруднику и списывается из казны. «Одобрено» — просто отметка.
+      if (status === 'counted' && report.requestedAmount > 0) {
         const targetUser = users.find((u) => u.id === report.userId);
         if (targetUser) {
           await saveFullStaffProfileDoc({
@@ -1682,17 +1703,34 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
       }
 
+      const verdict =
+        status === 'counted'
+          ? 'Рапорт на премию засчитан'
+          : status === 'approved'
+          ? 'Рапорт на премию одобрен'
+          : 'Рапорт на премию отклонён';
       await addAuditLog(
         'bonus_report',
-        status === 'approved' ? 'Рапорт на премию одобрен' : 'Рапорт на премию отклонён',
-        `Владелец ${status === 'approved' ? 'одобрил' : 'отклонил'} рапорт ${report.nickname} на сумму $${report.requestedAmount.toLocaleString()}`
+        verdict,
+        `Владелец ${
+          status === 'counted' ? 'засчитал' : status === 'approved' ? 'одобрил' : 'отклонил'
+        } рапорт ${report.nickname} на сумму $${report.requestedAmount.toLocaleString()}${
+          status === 'counted' ? ' (премия выплачена из казны)' : ''
+        }`
       );
       addNotification(
-        status === 'approved' ? 'Рапорт одобрен' : 'Рапорт отклонён',
-        `Рапорт сотрудника ${report.nickname} переведён в статус «${status === 'approved' ? 'Одобрено' : 'Отклонено'}»`,
-        status === 'approved' ? 'success' : 'warning'
+        status === 'counted' ? 'Рапорт засчитан' : status === 'approved' ? 'Рапорт одобрен' : 'Рапорт отклонён',
+        `Рапорт сотрудника ${report.nickname} переведён в статус «${
+          status === 'counted' ? 'Одобрено и засчитано' : status === 'approved' ? 'Одобрено' : 'Отклонено'
+        }»`,
+        status === 'rejected' ? 'warning' : 'success'
       );
     } catch (error) {
+      addNotification(
+        'Не удалось провести рапорт',
+        'Firestore отклонил запись. Скорее всего, актуальные правила безопасности (firestore.rules) ещё не опубликованы в консоли Firebase для базы ai-studio-apathyrp… — опубликуй их и попробуй снова.',
+        'alert'
+      );
       handleFirestoreError(error, OperationType.UPDATE, `bonus_reports/${reportId}`);
     }
   };
@@ -1953,6 +1991,51 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const updateVehicleFields = async (
+    vehicleId: string,
+    updates: {
+      modelName?: string;
+      plate?: string;
+      trunkKg?: number;
+      slot?: string;
+      rankRequired?: string;
+    }
+  ) => {
+    const target = fleet.find((v) => v.id === vehicleId);
+    if (!target) return;
+
+    const nextVeh: VehicleItem = {
+      ...target,
+      ...(updates.modelName !== undefined
+        ? { modelName: updates.modelName.trim().slice(0, 80) || target.modelName }
+        : {}),
+      ...(updates.plate !== undefined ? { plate: updates.plate.trim().slice(0, 32) || target.plate } : {}),
+      ...(updates.trunkKg !== undefined ? { trunkKg: Math.max(0, updates.trunkKg) } : {}),
+      ...(updates.slot !== undefined ? { slot: updates.slot.trim().slice(0, 64) || target.slot } : {}),
+      ...(updates.rankRequired !== undefined
+        ? { rankRequired: updates.rankRequired.trim().slice(0, 64) || target.rankRequired }
+        : {}),
+    };
+
+    try {
+      await setDoc(doc(db, 'fleet', vehicleId), nextVeh);
+      // Закреплённые ярлыки в профилях сотрудников хранят строку "Модель [Номер]".
+      const oldLabel = `${target.modelName} [${target.plate}]`;
+      const newLabel = `${nextVeh.modelName} [${nextVeh.plate}]`;
+      if (oldLabel !== newLabel) {
+        for (const u of users) {
+          if (u.assignedVehicle === oldLabel) {
+            await saveFullStaffProfileDoc({ ...u, assignedVehicle: newLabel });
+          }
+        }
+      }
+      await addAuditLog('fleet', 'Редактирование авто', `${nextVeh.modelName} [${nextVeh.plate}]`);
+      addNotification('Транспорт обновлён', `${nextVeh.modelName} [${nextVeh.plate}] сохранён`, 'info');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `fleet/${vehicleId}`);
+    }
+  };
+
   const addVehicle = async (newVehicle: Omit<VehicleItem, 'id'>) => {
     const vehId = `veh-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     const item: VehicleItem = {
@@ -2050,6 +2133,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         updateHallOfFameWinner,
         updateVehicleStatus,
         updateVehiclePublicFields,
+        updateVehicleFields,
         addVehicle,
         deleteVehicle,
         markNotificationAsRead,

@@ -55,7 +55,7 @@ export const ArchitectureExplainerModal: React.FC = () => {
                   </div>
                   <h4 className="text-sm font-bold text-white mt-2">Публичный Сайт</h4>
                   <p className="text-xs text-zinc-400 mt-1 leading-snug">
-                    Виден всем гостям и смотрителям. Показывает метрики корпорации, автопарк, Доску Почёта и калькулятор 50/50.
+                    Виден всем гостям и смотрителям. Показывает метрики корпорации, автопарк, Доску Почёта и калькулятор выплат.
                   </p>
                 </div>
                 <div className="pt-2 border-t border-zinc-800/80 text-[11px] text-emerald-400 flex items-center gap-1 font-mono-custom">
@@ -75,7 +75,7 @@ export const ArchitectureExplainerModal: React.FC = () => {
                   </div>
                   <div className="text-[11px] text-zinc-400 mt-2 font-mono-custom space-y-0.5">
                     <div>• users & pin credentials</div>
-                    <div>• farm & resources (50/50)</div>
+                    <div>• farm & resources</div>
                     <div>• treasury & fleet & audit</div>
                   </div>
                 </div>
@@ -117,7 +117,7 @@ export const ArchitectureExplainerModal: React.FC = () => {
                 <br /><b className="text-red-300">• Администратор [09]:</b> Редактирует аналитику, закреплённый транспорт/служебные заметки, добычу персонала и автопарк.
                 <br /><b className="text-pink-300">• Отдел Кадров [05]:</b> Контроль штата и редактирование добычи ресурсов у персонала.
                 <br /><b className="text-cyan-300">• Менеджер [06]:</b> Просмотр штата и аналитики.
-                <br /><b className="text-emerald-300">• Сотрудник [04]:</b> Личный рабочий профиль, подача рапортов на премирование и калькулятор расчёта 50/50.
+                <br /><b className="text-emerald-300">• Сотрудник [04]:</b> Личный рабочий профиль, подача рапортов на премирование и калькулятор расчёта выплат.
               </p>
             </div>
 

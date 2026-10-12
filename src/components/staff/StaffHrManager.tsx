@@ -22,7 +22,14 @@ import {
   XCircle,
   UserCheck,
 } from 'lucide-react';
-import { ROLE_DEFINITIONS, UserRole, UserProfile, isProfileOnline } from '../../types/database';
+import {
+  ROLE_DEFINITIONS,
+  UserRole,
+  UserProfile,
+  isProfileOnline,
+  RANK_LADDER,
+  RANK_OPTIONS,
+} from '../../types/database';
 
 export const StaffHrManager: React.FC = () => {
   const {
@@ -253,10 +260,9 @@ PIN-код: ${createdCredentialsCard.pin}
     updateUserCredentialsByOwner(userId, { role: targetRole });
   };
 
-  const handleRankChange = (userId: string, currentRank: number, delta: number) => {
+  const handleRankChange = (userId: string, nextRank: number) => {
     if (!isOwner) return;
-    const next = Math.max(1, Math.min(10, currentRank + delta));
-    updateUserCredentialsByOwner(userId, { rankNumber: next });
+    updateUserCredentialsByOwner(userId, { rankNumber: nextRank });
   };
 
   const handleSavePin = (userId: string) => {
@@ -424,7 +430,7 @@ PIN-код: ${createdCredentialsCard.pin}
                   : 'bg-white/5 text-zinc-400 hover:text-white'
               }`}
             >
-              + Добавить сданную добычу (50/50 в баланс и казну)
+              + Добавить сданную добычу (по прайсу в баланс и казну)
             </button>
             <button
               type="button"
@@ -517,7 +523,7 @@ PIN-код: ${createdCredentialsCard.pin}
                 type="submit"
                 className="px-5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold cursor-pointer"
               >
-                {farmEditMode === 'add' ? 'Начислить добычу (50/50)' : 'Сохранить точные значения'}
+                {farmEditMode === 'add' ? 'Начислить добычу' : 'Сохранить точные значения'}
               </button>
             </div>
           </form>
@@ -737,10 +743,10 @@ PIN-код: ${createdCredentialsCard.pin}
                               onChange={(e) => setReviewRole(e.target.value as UserRole)}
                               className="w-full px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-white/10 text-white text-xs focus:outline-none focus:border-emerald-400"
                             >
-                              <option value="employee">Сотрудник / Фармер [04]</option>
-                              <option value="hr">Отдел кадров (HR) [05]</option>
-                              <option value="manager">Менеджер / Логист [06]</option>
-                              <option value="admin">Администратор / Зам [09]</option>
+                              <option value="employee">Сотрудник / Фармер</option>
+                              <option value="hr">Отдел кадров (HR)</option>
+                              <option value="manager">Менеджер / Логист</option>
+                              <option value="admin">Администратор / Зам</option>
                             </select>
                           </div>
                           <div>
@@ -931,10 +937,10 @@ PIN-код: ${createdCredentialsCard.pin}
                     onChange={(e) => setNewRole(e.target.value as UserRole)}
                     className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
                   >
-                    <option value="admin">Администратор / Зам [09]</option>
-                    <option value="manager">Менеджер / Логист [06]</option>
-                    <option value="hr">Отдел кадров (HR) [05]</option>
-                    <option value="employee">Сотрудник / Фармер [04]</option>
+                    <option value="admin">Администратор / Зам</option>
+                    <option value="manager">Менеджер / Логист</option>
+                    <option value="hr">Отдел кадров (HR)</option>
+                    <option value="employee">Сотрудник / Фармер</option>
                   </select>
                 </div>
 
@@ -950,15 +956,18 @@ PIN-код: ${createdCredentialsCard.pin}
                 </div>
 
                 <div>
-                  <label className="block text-zinc-400 mb-1">Ранг (1-10):</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
+                  <label className="block text-zinc-400 mb-1">Ранг:</label>
+                  <select
                     value={newRankNumber}
                     onChange={(e) => setNewRankNumber(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white focus:outline-none focus:border-purple-400"
-                  />
+                  >
+                    {[...RANK_OPTIONS].reverse().map((n) => (
+                      <option key={n} value={n}>
+                        [{String(n).padStart(2, '0')}] {RANK_LADDER[n]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1213,7 +1222,7 @@ PIN-код: ${createdCredentialsCard.pin}
                             <button
                               onClick={() => handleOpenFarmModal(u, 'add')}
                               className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-900 flex items-center gap-0.5 cursor-pointer"
-                              title="Начислить сданную добычу (+50/50)"
+                              title="Начислить сданную добычу по прайсу"
                             >
                               <PlusCircle className="w-2.5 h-2.5" />
                               <span>+Добыча</span>
@@ -1241,7 +1250,7 @@ PIN-код: ${createdCredentialsCard.pin}
                         <b className="text-white">{totalFlowers} шт.</b>
                       </div>
                       <div className="flex justify-between text-emerald-400 pt-1 border-t border-white/5 font-bold">
-                        <span>Баланс выплат (50%):</span>
+                        <span>Баланс выплат:</span>
                         <span>${u.walletBalance.toLocaleString()}</span>
                       </div>
                     </div>
@@ -1259,26 +1268,26 @@ PIN-код: ${createdCredentialsCard.pin}
                               onChange={(e) => handleRoleChange(u.id, e.target.value as UserRole)}
                               className="flex-1 bg-black/60 border border-white/10 rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-cyan-400"
                             >
-                              <option value="admin">Администратор [09]</option>
-                              <option value="manager">Менеджер [06]</option>
-                              <option value="hr">Отдел кадров [05]</option>
-                              <option value="employee">Сотрудник [04]</option>
+                              <option value="admin">Администратор</option>
+                              <option value="manager">Менеджер</option>
+                              <option value="hr">Отдел кадров</option>
+                              <option value="employee">Сотрудник</option>
                             </select>
                           </div>
 
                           <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => handleRankChange(u.id, u.rankNumber, 1)}
-                              className="flex-1 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-cyan-300 transition-colors cursor-pointer"
+                            <span className="text-[10px] text-zinc-500 shrink-0">Ранг:</span>
+                            <select
+                              value={u.rankNumber}
+                              onChange={(e) => handleRankChange(u.id, Number(e.target.value))}
+                              className="flex-1 bg-black/60 border border-white/10 rounded px-2 py-1 text-[11px] text-white focus:outline-none focus:border-cyan-400"
                             >
-                              +1 Ранг
-                            </button>
-                            <button
-                              onClick={() => handleRankChange(u.id, u.rankNumber, -1)}
-                              className="flex-1 py-1 rounded bg-white/5 hover:bg-white/10 border border-white/10 text-[10px] text-zinc-400 transition-colors cursor-pointer"
-                            >
-                              -1 Ранг
-                            </button>
+                              {[...RANK_OPTIONS].reverse().map((n) => (
+                                <option key={n} value={n}>
+                                  [{String(n).padStart(2, '0')}] {RANK_LADDER[n]}
+                                </option>
+                              ))}
+                            </select>
                           </div>
 
                           {editingPinUserId === u.id ? (

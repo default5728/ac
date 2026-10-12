@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useDatabase } from '../../context/DatabaseContext';
-import { Truck, Fuel, Plus, Trash2, Lock, CheckCircle2, Eye, Image as ImageIcon } from 'lucide-react';
+import { Truck, Plus, Trash2, Lock, CheckCircle2, Eye, Image as ImageIcon, Pencil, Save, X } from 'lucide-react';
 import { ROLE_DEFINITIONS, VehicleItem, VehicleStatus } from '../../types/database';
 
 export const StaffFleetManager: React.FC = () => {
@@ -8,6 +8,7 @@ export const StaffFleetManager: React.FC = () => {
     fleet,
     updateVehicleStatus,
     updateVehiclePublicFields,
+    updateVehicleFields,
     addVehicle,
     deleteVehicle,
     currentUser,
@@ -23,6 +24,34 @@ export const StaffFleetManager: React.FC = () => {
   const [newSlot, setNewSlot] = useState('Слот 1');
   const [newRankReq, setNewRankReq] = useState('Ранг [01]+');
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
+
+  // Редактирование существующего авто (модель, номер, багажник, слот, ранг)
+  const [editingVehId, setEditingVehId] = useState<string | null>(null);
+  const [editModel, setEditModel] = useState('');
+  const [editPlate, setEditPlate] = useState('');
+  const [editTrunk, setEditTrunk] = useState('0');
+  const [editSlot, setEditSlot] = useState('');
+  const [editRankReq, setEditRankReq] = useState('');
+
+  const handleStartEdit = (veh: VehicleItem) => {
+    setEditingVehId(veh.id);
+    setEditModel(veh.modelName);
+    setEditPlate(veh.plate);
+    setEditTrunk(String(veh.trunkKg));
+    setEditSlot(veh.slot);
+    setEditRankReq(veh.rankRequired);
+  };
+
+  const handleSaveEdit = (vehId: string) => {
+    updateVehicleFields(vehId, {
+      modelName: editModel.trim(),
+      plate: editPlate.trim(),
+      trunkKg: Math.max(0, parseInt(editTrunk, 10) || 0),
+      slot: editSlot.trim(),
+      rankRequired: editRankReq.trim(),
+    });
+    setEditingVehId(null);
+  };
 
   const statuses: VehicleStatus[] = ['Готов к выезду', 'Ремонт', 'Зарезервирован'];
 
@@ -226,35 +255,121 @@ export const StaffFleetManager: React.FC = () => {
                       {veh.plate}
                     </span>
                     {canEdit && (
-                      <button
-                        onClick={() => deleteVehicle(veh.id)}
-                        className="p-1 text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
-                        title="Удалить машину"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <>
+                        <button
+                          onClick={() =>
+                            editingVehId === veh.id ? setEditingVehId(null) : handleStartEdit(veh)
+                          }
+                          className="p-1 text-zinc-500 hover:text-cyan-300 transition-colors cursor-pointer"
+                          title="Редактировать машину"
+                        >
+                          {editingVehId === veh.id ? <X className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => deleteVehicle(veh.id)}
+                          className="p-1 text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
+                          title="Удалить машину"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
                 <p className="text-xs text-zinc-400 mb-3">{veh.category}</p>
 
-                <div className="text-xs font-mono-custom space-y-1 text-zinc-400 bg-black/40 p-3 rounded-xl border border-white/5 mb-4">
-                  <div className="flex justify-between">
-                    <span>Багажник:</span>
-                    <span className="text-white font-bold">{veh.trunkKg} кг</span>
+                {editingVehId === veh.id ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleSaveEdit(veh.id);
+                    }}
+                    className="text-xs font-mono-custom space-y-2 bg-black/40 p-3 rounded-xl border border-cyan-500/30 mb-4"
+                  >
+                    <div>
+                      <label className="text-[10px] text-zinc-400 block mb-0.5">Модель:</label>
+                      <input
+                        type="text"
+                        required
+                        value={editModel}
+                        onChange={(e) => setEditModel(e.target.value)}
+                        className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">Номер:</label>
+                        <input
+                          type="text"
+                          value={editPlate}
+                          onChange={(e) => setEditPlate(e.target.value)}
+                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">Багажник (кг):</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={editTrunk}
+                          onChange={(e) => setEditTrunk(e.target.value)}
+                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">Слот:</label>
+                        <input
+                          type="text"
+                          value={editSlot}
+                          onChange={(e) => setEditSlot(e.target.value)}
+                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-zinc-400 block mb-0.5">Доступ (ранг):</label>
+                        <input
+                          type="text"
+                          value={editRankReq}
+                          onChange={(e) => setEditRankReq(e.target.value)}
+                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditingVehId(null)}
+                        className="px-3 py-1 rounded-lg bg-white/5 text-zinc-400 hover:text-white cursor-pointer"
+                      >
+                        Отмена
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-black font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Save className="w-3 h-3" />
+                        Сохранить
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="text-xs font-mono-custom space-y-1 text-zinc-400 bg-black/40 p-3 rounded-xl border border-white/5 mb-4">
+                    <div className="flex justify-between">
+                      <span>Багажник:</span>
+                      <span className="text-white font-bold">{veh.trunkKg} кг</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Слот:</span>
+                      <span className="text-zinc-300">{veh.slot}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Доступ:</span>
+                      <span className="text-zinc-300">{veh.rankRequired}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Слот:</span>
-                    <span className="text-zinc-300">{veh.slot}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="flex items-center gap-1">
-                      <Fuel className="w-3.5 h-3.5 text-amber-400" />
-                      Бак:
-                    </span>
-                    <span className="text-zinc-200 font-bold">{veh.fuelPercent}%</span>
-                  </div>
-                </div>
+                )}
 
                 {canEdit && (
                   <div className="space-y-2 mb-4">

@@ -54,7 +54,7 @@ service cloud.firestore {
         data.role is string && data.role.size() <= 16 &&
         (data.role == 'owner' || data.role == 'admin' || data.role == 'manager' || data.role == 'hr' || data.role == 'employee') &&
         data.cid is string && data.cid.size() >= 1 && data.cid.size() <= 32 &&
-        data.rankNumber is number && data.rankNumber >= 1 && data.rankNumber <= 10 &&
+        data.rankNumber is number && data.rankNumber >= 1 && data.rankNumber <= 11 &&
         data.rankName is string && data.rankName.size() >= 1 && data.rankName.size() <= 64 &&
         data.department is string && data.department.size() >= 1 && data.department.size() <= 64 &&
         data.walletBalance is number && data.walletBalance >= 0 &&
@@ -171,7 +171,7 @@ service cloud.firestore {
         data.comment is string && data.comment.size() >= 1 && data.comment.size() <= 500 &&
         data.createdAt is string && data.createdAt.size() >= 1 && data.createdAt.size() <= 64 &&
         data.status is string && data.status.size() <= 16 &&
-        (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected');
+        (data.status == 'pending' || data.status == 'approved' || data.status == 'counted' || data.status == 'rejected');
     }
 
     // Applicant PII arrives from the unauthenticated public portal, so every field is
@@ -333,9 +333,11 @@ service cloud.firestore {
     }
 
     // Collection 8: /audit_logs/{logId}
+    // ВАЖНО: list-правило обязано повторять условие запроса портала (where timestamp >= '0'),
+    // иначе Firestore не может доказать безопасность выборки и отклоняет весь list.
     match /audit_logs/{logId} {
       allow get: if isValidId(logId) && existing().timestamp.size() >= 1;
-      allow list: if existing().timestamp.size() >= 1;
+      allow list: if existing().timestamp >= '0';
       allow create: if isValidId(logId) && isValidAuditLogItem(incoming()) &&
         incoming().id == logId &&
         exists(/databases/$(database)/documents/staff_profiles/$(incoming().actorId));

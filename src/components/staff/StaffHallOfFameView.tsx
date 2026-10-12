@@ -342,7 +342,7 @@ export const StaffHallOfFameView: React.FC = () => {
                   )}
                 </h3>
                 <p className="text-[11px] text-zinc-400 font-mono-custom">
-                  Видно только Владельцу корпорации. Вы можете одобрить рапорт (с выплатой премии или без) либо отклонить его.
+                  Видно только Владельцу корпорации. «Одобрить» — отметить без выплаты, «Засчитать» — выплатить премию из казны, либо отклонить.
                 </p>
               </div>
             </div>
@@ -369,8 +369,10 @@ export const StaffHallOfFameView: React.FC = () => {
                     className={`p-4 rounded-xl border transition-all flex flex-col lg:flex-row justify-between gap-4 ${
                       rep.status === 'pending'
                         ? 'bg-amber-950/15 border-amber-500/40'
-                        : rep.status === 'approved'
+                        : rep.status === 'counted'
                         ? 'bg-emerald-950/15 border-emerald-500/30'
+                        : rep.status === 'approved'
+                        ? 'bg-sky-950/15 border-sky-500/30'
                         : 'bg-rose-950/15 border-rose-500/30 opacity-75'
                     }`}
                   >
@@ -389,8 +391,10 @@ export const StaffHallOfFameView: React.FC = () => {
                           className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                             rep.status === 'pending'
                               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : rep.status === 'approved'
+                              : rep.status === 'counted'
                               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : rep.status === 'approved'
+                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                               : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                           }`}
                         >
@@ -398,6 +402,8 @@ export const StaffHallOfFameView: React.FC = () => {
                             ? 'На рассмотрении'
                             : rep.status === 'approved'
                             ? 'Одобрено'
+                            : rep.status === 'counted'
+                            ? 'Одобрено и засчитано'
                             : 'Отклонено'}
                         </span>
                       </div>
@@ -424,23 +430,23 @@ export const StaffHallOfFameView: React.FC = () => {
                       {rep.status === 'pending' && (
                         <>
                           <button
-                            onClick={() => reviewBonusReport(rep.id, 'approved', true)}
+                            onClick={() => reviewBonusReport(rep.id, 'counted')}
                             className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold flex items-center gap-1 transition-all cursor-pointer"
-                            title="Одобрить рапорт и начислить премию сотруднику из казны"
+                            title="Засчитать рапорт: начислить премию сотруднику и списать из казны"
                           >
                             <DollarSign className="w-3.5 h-3.5" />
-                            <span>Одобрить + Выплатить</span>
+                            <span>Одобрить + Засчитать</span>
                           </button>
                           <button
-                            onClick={() => reviewBonusReport(rep.id, 'approved', false)}
-                            className="px-3 py-1.5 rounded-lg bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-bold flex items-center gap-1 transition-all cursor-pointer"
-                            title="Одобрить рапорт без автоматического списания"
+                            onClick={() => reviewBonusReport(rep.id, 'approved')}
+                            className="px-3 py-1.5 rounded-lg bg-sky-950 hover:bg-sky-900 border border-sky-500/40 text-sky-300 font-bold flex items-center gap-1 transition-all cursor-pointer"
+                            title="Одобрить рапорт без выплаты — просто отметка"
                           >
                             <Check className="w-3.5 h-3.5" />
                             <span>Одобрить</span>
                           </button>
                           <button
-                            onClick={() => reviewBonusReport(rep.id, 'rejected', false)}
+                            onClick={() => reviewBonusReport(rep.id, 'rejected')}
                             className="px-3 py-1.5 rounded-lg bg-rose-950/80 hover:bg-rose-900 border border-rose-500/40 text-rose-300 flex items-center gap-1 transition-all cursor-pointer"
                           >
                             <X className="w-3.5 h-3.5" />
@@ -487,8 +493,10 @@ export const StaffHallOfFameView: React.FC = () => {
                   className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase ${
                     rep.status === 'pending'
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                      : rep.status === 'approved'
+                      : rep.status === 'counted'
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : rep.status === 'approved'
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                       : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
                   }`}
                 >
@@ -496,6 +504,8 @@ export const StaffHallOfFameView: React.FC = () => {
                     ? 'Передано Владельцу'
                     : rep.status === 'approved'
                     ? 'Одобрено Владельцем'
+                    : rep.status === 'counted'
+                    ? 'Одобрено и засчитано'
                     : 'Отклонено'}
                 </span>
               </div>

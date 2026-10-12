@@ -192,6 +192,12 @@ export interface VehicleItem {
   status: VehicleStatus;
   fuelPercent: number;
   plate: string;
+  /** Public site visibility toggle (Apathy-Corp-Public reads this collection). */
+  publicVisible?: boolean;
+  /** Data-URL preview shown on the public site card. */
+  publicImage?: string;
+  /** Optional free-text description overriding the auto-composed one. */
+  publicDesc?: string;
 }
 
 export interface HallOfFameEntry {
@@ -204,7 +210,29 @@ export interface HallOfFameEntry {
   bonusReward: number;
 }
 
-export type BonusReportStatus = 'pending' | 'approved' | 'rejected';
+/**
+ * Полная служебная лестница корпорации [02]–[11] (как в Discord-ролах).
+ * [01] Novice — пригласительный ранг, в пикере не предлагается.
+ */
+export const RANK_LADDER: Record<number, string> = {
+  11: 'Генеральный директор',
+  10: 'Исполнительный директор',
+  9: 'Глава HR-отдела',
+  8: 'Менеджер',
+  7: 'Глава логистики',
+  6: 'Супервайзер',
+  5: 'Мастер смены',
+  4: 'Специалист логистики',
+  3: 'Перевозчик',
+  2: 'Сотрудник',
+};
+
+/** Ранги, доступные в пикере (по возрастанию). */
+export const RANK_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+export const MAX_RANK = 11;
+
+export type BonusReportStatus = 'pending' | 'approved' | 'counted' | 'rejected';
 
 export interface BonusReport {
   id: string;

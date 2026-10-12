@@ -29,8 +29,6 @@ export const StaffAnalyticsView: React.FC = () => {
     presenceNow,
   } = useDatabase();
 
-  const [timeframe, setTimeframe] = useState<'shift' | 'week' | 'all'>('all');
-
   const userRole = currentUser?.role || 'employee';
   const canEditAnalytics = ROLE_DEFINITIONS[userRole].permissions.canEditAnalytics;
   const canEditStaffFarm = ROLE_DEFINITIONS[userRole].permissions.canEditStaffFarm;
@@ -74,8 +72,6 @@ export const StaffAnalyticsView: React.FC = () => {
     totalRock * RESOURCE_PRICES.rock +
     totalWood * RESOURCE_PRICES.wood +
     totalFlowers * RESOURCE_PRICES.blueFlower;
-
-  const totalWorkersPaid = grossValueProduced * 0.5;
 
   const openAnalyticsEditor = () => {
     setEditTreasury(String(financials.treasuryBalance || 0));
@@ -195,7 +191,7 @@ export const StaffAnalyticsView: React.FC = () => {
         <div>
           <h2 className="text-xl font-black text-white flex items-center gap-2">
             <BarChart2 className="w-5 h-5 text-cyan-400" />
-            Служебная Аналитика & KPI Корпорации (Фарм 50/50)
+            Служебная Аналитика & KPI Корпорации
           </h2>
           <p className="text-xs text-zinc-400 mt-1">
             Сводка выработки смен, сданной добычи (порода, дерево, цветы) и реальная казна корпорации.
@@ -214,28 +210,6 @@ export const StaffAnalyticsView: React.FC = () => {
               <span>{isEditingAnalytics ? 'Закрыть редактор' : 'Редактировать аналитику'}</span>
             </button>
           )}
-
-          <div className="flex gap-1 bg-black/40 p-1 rounded-xl border border-white/10 text-xs font-mono-custom">
-            {(
-              [
-                { id: 'shift', label: 'Текущая смена' },
-                { id: 'week', label: 'Неделя' },
-                { id: 'all', label: 'За всё время' },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTimeframe(t.id)}
-                className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
-                  timeframe === t.id
-                    ? 'bg-cyan-500 text-black font-bold'
-                    : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -386,7 +360,7 @@ export const StaffAnalyticsView: React.FC = () => {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10">
           <span className="text-[10px] font-mono-custom text-zinc-400 uppercase">
-            Казна корпорации (50%)
+            Казна корпорации
           </span>
           <div className="text-2xl font-black text-emerald-400 mt-1">
             ${totalTreasury.toLocaleString()}
@@ -398,10 +372,10 @@ export const StaffAnalyticsView: React.FC = () => {
 
         <div className="p-4 rounded-xl bg-zinc-950 border border-white/10">
           <span className="text-[10px] font-mono-custom text-zinc-400 uppercase">
-            Выплачено персоналу (50%)
+            Выплачено персоналу
           </span>
           <div className="text-2xl font-black text-cyan-400 mt-1">
-            ${totalWorkersPaid.toLocaleString()}
+            ${grossValueProduced.toLocaleString()}
           </div>
           <div className="text-[11px] text-zinc-500 font-mono-custom mt-1">
             Заработная плата на руки
@@ -538,7 +512,7 @@ export const StaffAnalyticsView: React.FC = () => {
                   : 'bg-white/5 text-zinc-400 hover:text-white'
               }`}
             >
-              + Начислить сданную партию (50/50 в баланс и аналитику)
+              + Начислить сданную партию (по прайсу в баланс и аналитику)
             </button>
             <button
               type="button"
@@ -631,7 +605,7 @@ export const StaffAnalyticsView: React.FC = () => {
                 type="submit"
                 className="px-5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold cursor-pointer"
               >
-                {staffEditMode === 'add' ? 'Начислить добычу (50/50)' : 'Сохранить изменения'}
+                {staffEditMode === 'add' ? 'Начислить добычу' : 'Сохранить изменения'}
               </button>
             </div>
           </form>
@@ -668,7 +642,7 @@ export const StaffAnalyticsView: React.FC = () => {
                   <th className="pb-3 font-semibold">Порода</th>
                   <th className="pb-3 font-semibold">Дерево</th>
                   <th className="pb-3 font-semibold">Цветы</th>
-                  <th className="pb-3 font-semibold text-right">Заработано (50%)</th>
+                  <th className="pb-3 font-semibold text-right">Заработано</th>
                   {canEditStaffFarm && (
                     <th className="pb-3 font-semibold text-right">Управление добычей</th>
                   )}
@@ -715,7 +689,7 @@ export const StaffAnalyticsView: React.FC = () => {
                             <button
                               onClick={() => openStaffFarmModal(u, 'add')}
                               className="px-2.5 py-1 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-300 text-[10px] flex items-center gap-1 transition-colors cursor-pointer"
-                              title="Начислить сданную добычу (50/50)"
+                              title="Начислить сданную добычу по прайсу"
                             >
                               <PlusCircle className="w-3 h-3" />
                               <span>+Добыча</span>

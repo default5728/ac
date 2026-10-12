@@ -9,7 +9,7 @@ export const StaffTreasuryManager: React.FC = () => {
   const isOwner = userRole === 'owner';
 
   const [amountStr, setAmountStr] = useState('250000');
-  const [reason, setReason] = useState('Дивиденды инвесторам / Премиальный фонд');
+  const [reason, setReason] = useState('Пополнение счёта корпорации');
   const [actionType, setActionType] = useState<'add' | 'sub'>('add');
 
   const handleTransaction = (e: React.FormEvent) => {
@@ -50,7 +50,7 @@ export const StaffTreasuryManager: React.FC = () => {
       </div>
 
       {/* Main Balances */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <div className="p-6 rounded-2xl bg-gradient-to-br from-amber-950/30 to-black border border-amber-500/40">
           <span className="text-[10px] font-mono-custom text-amber-400 uppercase tracking-wider">
             Баланс Главной Казны
@@ -60,18 +60,6 @@ export const StaffTreasuryManager: React.FC = () => {
           </div>
           <span className="text-xs text-emerald-400 font-mono-custom">
             ▲ +${financials.weeklyGain.toLocaleString()} за текущую неделю
-          </span>
-        </div>
-
-        <div className="p-6 rounded-2xl bg-zinc-950 border border-white/10">
-          <span className="text-[10px] font-mono-custom text-zinc-400 uppercase tracking-wider">
-            Оборот по 50/50
-          </span>
-          <div className="text-3xl font-black text-cyan-400 mt-1 mb-2">
-            ${(financials.treasuryBalance * 2).toLocaleString()}
-          </div>
-          <span className="text-xs text-zinc-500 font-mono-custom">
-            Суммарно: сотрудники + казна (50/50)
           </span>
         </div>
 
@@ -147,7 +135,7 @@ export const StaffTreasuryManager: React.FC = () => {
                 required
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="Закупка запчастей / Выплата дивидендов..."
+                placeholder="Пополнение счёта корпорации / Закупка запчастей..."
                 className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-amber-400"
               />
             </div>
