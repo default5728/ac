@@ -272,6 +272,11 @@ export interface CandidateApplication {
   reviewedAt: string;
   reviewerNotes: string;
   createdProfileId: string;
+  /** Код проверки статуса заявки на публичном сайте (AP-XXXXXX). */
+  publicCode?: string;
+  /** Discord-аккаунт кандидата, подтверждённый через OAuth бота: туда бот шлёт вердикт. */
+  discordVerifiedId?: string;
+  discordVerifiedName?: string;
 }
 
 export interface AuditLogItem {

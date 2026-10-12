@@ -618,6 +618,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                   reviewedAt: String(data.reviewedAt || ''),
                   reviewerNotes: String(data.reviewerNotes || ''),
                   createdProfileId: String(data.createdProfileId || ''),
+                  publicCode: String(data.publicCode || ''),
+                  discordVerifiedId: data.discordVerifiedId ? String(data.discordVerifiedId) : undefined,
+                  discordVerifiedName: data.discordVerifiedName ? String(data.discordVerifiedName) : undefined,
                 };
               })
               .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));

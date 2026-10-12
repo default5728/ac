@@ -26,10 +26,47 @@ import {
   ROLE_DEFINITIONS,
   UserRole,
   UserProfile,
+  CandidateApplication,
   isProfileOnline,
   RANK_LADDER,
   RANK_OPTIONS,
 } from '../../types/database';
+
+const NOTIFY_APPLICANT_URL = 'https://ac-p.vercel.app/api/notify-applicant';
+
+// ЛС кандидату от бота APATHY (вердикт HR + реквизиты). Best effort: на статус заявки
+// не влияет. Без VITE_PORTAL_NOTIFY_SECRET или без подтверждённого Discord — тихий скип.
+const notifyApplicant = async (
+  target: CandidateApplication,
+  decision: 'approved' | 'rejected',
+  extra: { pin?: string; roleTitle?: string; reason?: string }
+): Promise<boolean> => {
+  const secret = import.meta.env.VITE_PORTAL_NOTIFY_SECRET;
+  if (!secret || !target.discordVerifiedId) return false;
+  try {
+    const res = await fetch(NOTIFY_APPLICANT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-notify-secret': secret },
+      body: JSON.stringify({
+        applicationId: target.id,
+        publicCode: target.publicCode || '',
+        decision,
+        discordId: target.discordVerifiedId,
+        nick: target.nick,
+        cid: target.cid,
+        phone: target.phone,
+        discord: target.discord,
+        pin: extra.pin || '',
+        roleTitle: extra.roleTitle || '',
+        reason: extra.reason || '',
+      }),
+    });
+    const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+    return Boolean(res.ok && json?.ok);
+  } catch {
+    return false;
+  }
+};
 
 export const StaffHrManager: React.FC = () => {
   const {
@@ -113,6 +150,7 @@ export const StaffHrManager: React.FC = () => {
     discord: string;
     pin: string;
     roleTitle: string;
+    botNotified?: boolean;
   } | null>(null);
   const [copiedApproved, setCopiedApproved] = useState(false);
 
@@ -160,6 +198,13 @@ export const StaffHrManager: React.FC = () => {
       return;
     }
 
+    const botNotified = target.discordVerifiedId
+      ? await notifyApplicant(target, 'approved', {
+          pin: reviewPin.trim(),
+          roleTitle: ROLE_DEFINITIONS[reviewRole].title,
+        })
+      : undefined;
+
     setApprovedCard({
       nick: target.nick,
       cid: target.cid,
@@ -167,12 +212,15 @@ export const StaffHrManager: React.FC = () => {
       discord: target.discord,
       pin: reviewPin.trim(),
       roleTitle: ROLE_DEFINITIONS[reviewRole].title,
+      botNotified,
     });
     cancelReview();
   };
 
   const handleRejectApplication = async () => {
     if (!reviewTargetId) return;
+    const target = applications.find((a) => a.id === reviewTargetId);
+    if (!target) return;
     setReviewBusy(true);
     setReviewError('');
     const result = await rejectCandidateApplication(reviewTargetId, reviewReason);
@@ -180,6 +228,11 @@ export const StaffHrManager: React.FC = () => {
     if (!result.success) {
       setReviewError(result.error || 'Не удалось отклонить заявку.');
       return;
+    }
+    if (target.discordVerifiedId) {
+      await notifyApplicant(target, 'rejected', {
+        reason: reviewReason.trim() || 'Отклонено без комментария.',
+      });
     }
     cancelReview();
   };
@@ -577,7 +630,12 @@ PIN-код: ${createdCredentialsCard.pin}
                 <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
                   <UserCheck className="w-5 h-5" />
                   <span>
-                    Заявка принята — {approvedCard.nick} зачислен(а) в штат. Передайте реквизиты в Discord:
+                    Заявка принята — {approvedCard.nick} зачислен(а) в штат.
+                    {approvedCard.botNotified === true
+                      ? ' Бот отправил реквизиты кандидату в Discord:'
+                      : approvedCard.botNotified === false
+                      ? ' Бот не смог доставить сообщение — передайте реквизиты вручную:'
+                      : ' Передайте реквизиты в Discord:'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
