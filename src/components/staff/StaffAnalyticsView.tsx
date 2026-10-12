@@ -36,8 +36,6 @@ export const StaffAnalyticsView: React.FC = () => {
   // Analytics Editor State (Owner & Admin ONLY)
   const [isEditingAnalytics, setIsEditingAnalytics] = useState(false);
   const [editTreasury, setEditTreasury] = useState('0');
-  const [editWeeklyGain, setEditWeeklyGain] = useState('0');
-  const [editRadio, setEditRadio] = useState('104.2 MHz');
   const [editRock, setEditRock] = useState('0');
   const [editWood, setEditWood] = useState('0');
   const [editBlue, setEditBlue] = useState('0');
@@ -75,8 +73,6 @@ export const StaffAnalyticsView: React.FC = () => {
 
   const openAnalyticsEditor = () => {
     setEditTreasury(String(financials.treasuryBalance || 0));
-    setEditWeeklyGain(String(financials.weeklyGain || 0));
-    setEditRadio(financials.radioFrequency || '104.2 MHz');
     setEditRock(String(financials.totalMined?.rock || 0));
     setEditWood(String(financials.totalMined?.wood || 0));
     setEditBlue(String(financials.totalMined?.blueFlower || 0));
@@ -115,8 +111,6 @@ export const StaffAnalyticsView: React.FC = () => {
 
     updateFinancialsData({
       treasuryBalance: Math.max(0, parseInt(editTreasury, 10) || 0),
-      weeklyGain: Math.max(0, parseInt(editWeeklyGain, 10) || 0),
-      radioFrequency: editRadio.trim() || '104.2 MHz',
       totalMined: {
         rock: r,
         wood: w,
@@ -253,27 +247,6 @@ export const StaffAnalyticsView: React.FC = () => {
                   min="0"
                   value={editTreasury}
                   onChange={(e) => setEditTreasury(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-black border border-white/10 text-white focus:outline-none focus:border-cyan-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 mb-1">Прирост за неделю ($):</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={editWeeklyGain}
-                  onChange={(e) => setEditWeeklyGain(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-black border border-white/10 text-white focus:outline-none focus:border-cyan-400"
-                />
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 mb-1">Частота рации:</label>
-                <input
-                  type="text"
-                  value={editRadio}
-                  onChange={(e) => setEditRadio(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl bg-black border border-white/10 text-white focus:outline-none focus:border-cyan-400"
                 />
               </div>

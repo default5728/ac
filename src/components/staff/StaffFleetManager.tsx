@@ -21,16 +21,14 @@ export const StaffFleetManager: React.FC = () => {
   const [newModel, setNewModel] = useState('');
   const [newPlate, setNewPlate] = useState('');
   const [newTrunk, setNewTrunk] = useState('1500');
-  const [newSlot, setNewSlot] = useState('Слот 1');
   const [newRankReq, setNewRankReq] = useState('Ранг [01]+');
   const [descDrafts, setDescDrafts] = useState<Record<string, string>>({});
 
-  // Редактирование существующего авто (модель, номер, багажник, слот, ранг)
+  // Редактирование существующего авто (модель, номер, багажник, ранг)
   const [editingVehId, setEditingVehId] = useState<string | null>(null);
   const [editModel, setEditModel] = useState('');
   const [editPlate, setEditPlate] = useState('');
   const [editTrunk, setEditTrunk] = useState('0');
-  const [editSlot, setEditSlot] = useState('');
   const [editRankReq, setEditRankReq] = useState('');
 
   const handleStartEdit = (veh: VehicleItem) => {
@@ -38,7 +36,6 @@ export const StaffFleetManager: React.FC = () => {
     setEditModel(veh.modelName);
     setEditPlate(veh.plate);
     setEditTrunk(String(veh.trunkKg));
-    setEditSlot(veh.slot);
     setEditRankReq(veh.rankRequired);
   };
 
@@ -47,7 +44,6 @@ export const StaffFleetManager: React.FC = () => {
       modelName: editModel.trim(),
       plate: editPlate.trim(),
       trunkKg: Math.max(0, parseInt(editTrunk, 10) || 0),
-      slot: editSlot.trim(),
       rankRequired: editRankReq.trim(),
     });
     setEditingVehId(null);
@@ -110,7 +106,7 @@ export const StaffFleetManager: React.FC = () => {
       category: 'Рабочий транспорт',
       trunkKg: parseInt(newTrunk, 10) || 1000,
       rankRequired: newRankReq,
-      slot: newSlot.trim() || 'Ангар 1',
+      slot: '—',
       status: 'Готов к выезду',
       fuelPercent: 100,
     });
@@ -200,18 +196,6 @@ export const StaffFleetManager: React.FC = () => {
                 value={newTrunk}
                 onChange={(e) => setNewTrunk(e.target.value)}
                 placeholder="1500"
-                className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-xs text-white"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-zinc-400 font-mono-custom block mb-1">
-                Парковочный слот:
-              </label>
-              <input
-                type="text"
-                value={newSlot}
-                onChange={(e) => setNewSlot(e.target.value)}
-                placeholder="Слот 1"
                 className="w-full px-3 py-1.5 rounded-lg bg-black border border-white/10 text-xs text-white"
               />
             </div>
@@ -317,25 +301,14 @@ export const StaffFleetManager: React.FC = () => {
                         />
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] text-zinc-400 block mb-0.5">Слот:</label>
-                        <input
-                          type="text"
-                          value={editSlot}
-                          onChange={(e) => setEditSlot(e.target.value)}
-                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] text-zinc-400 block mb-0.5">Доступ (ранг):</label>
-                        <input
-                          type="text"
-                          value={editRankReq}
-                          onChange={(e) => setEditRankReq(e.target.value)}
-                          className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
-                        />
-                      </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-400 block mb-0.5">Доступ (ранг):</label>
+                      <input
+                        type="text"
+                        value={editRankReq}
+                        onChange={(e) => setEditRankReq(e.target.value)}
+                        className="w-full px-2 py-1 rounded-lg bg-black border border-white/10 text-white"
+                      />
                     </div>
                     <div className="flex justify-end gap-2 pt-1">
                       <button
@@ -359,10 +332,6 @@ export const StaffFleetManager: React.FC = () => {
                     <div className="flex justify-between">
                       <span>Багажник:</span>
                       <span className="text-white font-bold">{veh.trunkKg} кг</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Слот:</span>
-                      <span className="text-zinc-300">{veh.slot}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Доступ:</span>

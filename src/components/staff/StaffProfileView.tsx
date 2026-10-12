@@ -200,7 +200,7 @@ export const StaffProfileView: React.FC = () => {
                     const label = `${veh.modelName} [${veh.plate}]`;
                     return (
                       <option key={veh.id} value={label}>
-                        {veh.modelName} [{veh.plate}] · Багажник: {veh.trunkKg} кг ({veh.slot})
+                        {veh.modelName} [{veh.plate}] · Багажник: {veh.trunkKg} кг
                       </option>
                     );
                   })}
