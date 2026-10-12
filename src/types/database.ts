@@ -129,8 +129,9 @@ export const RESOURCE_PRICES = {
 
 export type ShiftStatus = 'on_shift' | 'off_duty';
 
-/** How long a session heartbeat keeps a profile marked as online. */
-export const PRESENCE_TTL_MS = 120000;
+/** How long a session heartbeat keeps a profile marked as online. Generous window: a hidden
+ * portal tab gets its timers throttled by Chrome to ~1/min, the TTL must survive that. */
+export const PRESENCE_TTL_MS = 300000;
 
 /** How often a logged-in client refreshes its heartbeat. */
 export const PRESENCE_HEARTBEAT_MS = 30000;
