@@ -10,6 +10,7 @@ import {
   onSnapshot,
   query,
   where,
+  runTransaction,
 } from 'firebase/firestore';
 import {
   db,
@@ -705,7 +706,10 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
       // Public-safe presence beacon: the public site counts these docs for "Сейчас в сети".
       // Doc ID is the opaque profile id, no nicknames or personal data inside.
-      setDoc(doc(db, 'public_presence', heartbeatProfileId), { at: nowIso }).catch(() => {});
+      // A denial here is invisible otherwise (caught promise), so surface it in the console.
+      setDoc(doc(db, 'public_presence', heartbeatProfileId), { at: nowIso }).catch((err) => {
+        console.warn('[APATHY beacon]', (err as { code?: string })?.code || err);
+      });
     };
     beat();
     const timer = setInterval(beat, PRESENCE_HEARTBEAT_MS);
@@ -2075,15 +2079,29 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const adjustTreasury = async (deltaAmount: number, reason: string) => {
     if (currentUser?.role !== 'owner') return;
-    const newBal = Math.max(0, financials.treasuryBalance + deltaAmount);
-    const nextFin: CorporationFinancials = {
-      ...financials,
-      treasuryBalance: newBal,
-      weeklyGain: deltaAmount > 0 ? financials.weeklyGain + deltaAmount : financials.weeklyGain,
-    };
-
+    // Transaction reads the latest numbers from Firestore: two rapid clicks must not
+    // overwrite each other (the in-memory financials lags behind the snapshot listener).
+    // weeklyGain tracks the NET movement: withdrawals subtract too, floored at 0.
     try {
-      await saveFullCorpStateDoc(nextFin);
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(doc(db, 'corp_state', 'main'));
+        const d = snap.data();
+        const docBalance =
+          typeof d?.treasuryBalance === 'number' ? d.treasuryBalance : financials.treasuryBalance;
+        const docGain = typeof d?.weeklyGain === 'number' ? d.weeklyGain : financials.weeklyGain;
+        tx.set(doc(db, 'corp_state', 'main'), {
+          treasuryBalance: Math.max(0, docBalance + deltaAmount),
+          weeklyGain: Math.max(0, docGain + deltaAmount),
+          rock: Math.max(0, financials.totalMined.rock),
+          wood: Math.max(0, financials.totalMined.wood),
+          blueFlower: Math.max(0, financials.totalMined.blueFlower),
+          redFlower: Math.max(0, financials.totalMined.redFlower),
+          pinkFlower: Math.max(0, financials.totalMined.pinkFlower),
+          totalEarned: Math.max(0, financials.totalMined.totalEarned),
+          activeWorkersCount: Math.max(0, financials.activeWorkersCount),
+          radioFrequency: (financials.radioFrequency || '104.2 MHz').slice(0, 64),
+        });
+      });
       await addAuditLog(
         'treasury',
         deltaAmount >= 0 ? 'Пополнение казны' : 'Списание из казны',
