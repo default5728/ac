@@ -4,6 +4,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -14,7 +15,7 @@ import {
   db,
   handleFirestoreError,
   OperationType,
-  computeCredentialHash,
+  computeLoginHash,
   computeSecretVaultId,
   ROOT_OWNER_HASH,
 } from '../lib/firebase';
@@ -52,10 +53,7 @@ import {
 } from '../store/initialData';
 
 interface LoginCredentials {
-  displayName: string;
-  cid: string;
-  phone: string;
-  discord: string;
+  nick: string;
   pin: string;
 }
 
@@ -87,6 +85,11 @@ interface DatabaseContextType {
 
   // Auth (Works across ANY domain: Vercel, Cloudflare, AI Studio without Google popup!)
   loginWithCredentials: (creds: LoginCredentials) => Promise<{ success: boolean; error?: string }>;
+  migrateStaffToLoginHashes: () => Promise<{
+    migrated: number;
+    skipped: number;
+    problems: string[];
+  }>;
   createUserByAdmin: (newUserData: {
     displayName: string;
     cid: string;
@@ -336,16 +339,28 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             lastActive: 'Онлайн',
           });
 
-          // 3. Seed isolated secret in /staff_secrets/{vaultId}
+          // 3. Seed isolated secret in /staff_secrets/{vaultId}.
+          // Fresh-database bootstrap: a one-time random PIN is generated here and
+          // printed to the browser console — no default credentials exist in the code.
+          const bootstrapPin = String(100000 + Math.floor(Math.random() * 900000));
+          const bootstrapHash = await computeLoginHash(rootOwner.displayName, bootstrapPin);
+          await setDoc(doc(db, 'auth_hashes', bootstrapHash), {
+            id: bootstrapHash,
+            profileId: rootOwner.id,
+            role: rootOwner.role,
+          });
           const vaultId = computeSecretVaultId(rootOwner.id);
           await setDoc(doc(db, 'staff_secrets', vaultId), {
             id: vaultId,
             profileId: rootOwner.id,
             phone: rootOwner.phone,
             discord: rootOwner.discord,
-            pin: rootOwner.pin,
-            credHash: ROOT_OWNER_HASH,
+            pin: bootstrapPin,
+            credHash: bootstrapHash,
           });
+          console.warn(
+            `[APATHY bootstrap] Одноразовый PIN владельца для первого входа (Ник: ${rootOwner.displayName}): ${bootstrapPin}. Смените его в Отделе кадров сразу после входа.`
+          );
 
           // 4. Seed /corp_state/main
           await setDoc(doc(db, 'corp_state', 'main'), {
@@ -832,29 +847,117 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setActiveToastIds((prev) => prev.filter((item) => item !== id));
   };
 
-  // Zero-knowledge login via /auth_hashes/{credHash} (no Google popup needed, works on Vercel/Cloudflare/anywhere!)
+  // One-time silent migration from the legacy five-field hash scheme (Nick+CID+Phone+
+  // Discord+PIN) to the Nick+PIN SHA-256 scheme. Runs only when the new-style hash
+  // lookup misses. The root owner is never migrated while its PIN is still the public 7777.
+  const tryLegacyMigration = async (
+    nickClean: string,
+    pinClean: string,
+    newHash: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    let profilesSnap;
+    try {
+      profilesSnap = await getDocs(collection(db, 'staff_profiles'));
+    } catch {
+      return { ok: false };
+    }
+
+    const nickLower = nickClean.toLowerCase();
+    const match = profilesSnap.docs.find((d) => {
+      const data = d.data();
+      return (
+        String(data.displayName || '')
+          .trim()
+          .toLowerCase() === nickLower || String(data.username || '') === nickLower
+      );
+    });
+    if (!match) return { ok: false };
+
+    const profileId = match.id;
+    const profileRole = String(match.data().role || 'employee');
+
+    const vaultId = computeSecretVaultId(profileId);
+    let legacyHash = '';
+    try {
+      const secSnap = await getDoc(doc(db, 'staff_secrets', vaultId));
+      if (!secSnap.exists()) return { ok: false };
+      const sd = secSnap.data();
+      legacyHash = String(sd.credHash || '');
+      if (String(sd.pin || '') !== pinClean) return { ok: false };
+    } catch {
+      return { ok: false };
+    }
+
+    if (profileId === 'u-owner-root' && pinClean === '7777') {
+      return {
+        ok: false,
+        error:
+          'Владелец: стандартный PIN отключён в новой системе. Смените свой PIN-код в Отделе кадров (иконка ключа) в СТАРОЙ версии портала, затем войдите с новым PIN.',
+      };
+    }
+
+    try {
+      const existing = await getDoc(doc(db, 'auth_hashes', newHash));
+      if (existing.exists() && String(existing.data().profileId) !== profileId) {
+        return { ok: false };
+      }
+
+      await setDoc(doc(db, 'auth_hashes', newHash), {
+        id: newHash,
+        profileId,
+        role: profileRole,
+      });
+
+      await updateDoc(doc(db, 'staff_secrets', vaultId), { credHash: newHash });
+
+      if (legacyHash && legacyHash !== newHash && legacyHash !== ROOT_OWNER_HASH) {
+        try {
+          await deleteDoc(doc(db, 'auth_hashes', legacyHash));
+        } catch {
+          // old hash may already be gone
+        }
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  };
+
+  // Zero-knowledge login via /auth_hashes/{hash} (no Google popup needed, works on Vercel/Cloudflare/anywhere!)
+  // Hash = SHA-256(Nick + PIN). Legacy five-field accounts migrate silently on first login.
   const loginWithCredentials = async (creds: LoginCredentials) => {
     try {
-      const inputHash = computeCredentialHash(
-        creds.displayName,
-        creds.cid,
-        creds.phone,
-        creds.discord,
-        creds.pin
-      );
+      const nickClean = creds.nick.trim().slice(0, 64);
+      const pinClean = creds.pin.trim().slice(0, 32);
+      if (!nickClean || !pinClean) {
+        return { success: false, error: 'Укажите Ник и PIN-код.' };
+      }
+
+      const inputHash = await computeLoginHash(nickClean, pinClean);
 
       // Direct point lookup in /auth_hashes/{inputHash} (list is disabled on server!)
-      const hashSnap = await getDoc(doc(db, 'auth_hashes', inputHash));
+      let hashSnap = await getDoc(doc(db, 'auth_hashes', inputHash));
+      if (!hashSnap.exists()) {
+        const migration = await tryLegacyMigration(nickClean, pinClean, inputHash);
+        if (!migration.ok) {
+          return {
+            success: false,
+            error:
+              migration.error ||
+              'Ошибка авторизации: неверный Ник или PIN-код. Вход разрешён исключительно сотрудникам, зарегистрированным Владельцем.',
+          };
+        }
+        hashSnap = await getDoc(doc(db, 'auth_hashes', inputHash));
+      }
+
       if (!hashSnap.exists()) {
         return {
           success: false,
-          error:
-            'Ошибка авторизации: неверные реквизиты (Ник, CID, Телефон, Discord или PIN). Вход разрешён исключительно по данным, зарегистрированным Владельцем.',
+          error: 'Ошибка авторизации: неверный Ник или PIN-код.',
         };
       }
 
-      const hashData = hashSnap.data();
-      const profileId = String(hashData.profileId);
+      const profileId = String(hashSnap.data().profileId);
 
       const profileSnap = await getDoc(doc(db, 'staff_profiles', profileId));
       if (!profileSnap.exists()) {
@@ -866,9 +969,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       const profileData = profileSnap.data();
       let savedSecret = {
-        phone: creds.phone.trim(),
-        discord: creds.discord.trim(),
-        pin: creds.pin.trim(),
+        phone: '',
+        discord: '',
+        pin: pinClean,
         credHash: inputHash,
       };
       try {
@@ -877,14 +980,14 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (secSnap.exists()) {
           const sd = secSnap.data();
           savedSecret = {
-            phone: String(sd.phone || creds.phone.trim()),
-            discord: String(sd.discord || creds.discord.trim()),
-            pin: String(sd.pin || creds.pin.trim()),
+            phone: String(sd.phone || ''),
+            discord: String(sd.discord || ''),
+            pin: String(sd.pin || pinClean),
             credHash: String(sd.credHash || inputHash),
           };
         }
       } catch {
-        // fallback to entered credentials
+        // profile continues without PII
       }
 
       secretsMapRef.current = { ...secretsMapRef.current, [profileId]: savedSecret };
@@ -978,7 +1081,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const rankInfo = roleRankMap[newUserData.role] || { num: 4, name: 'Сотрудник' };
     const newId = `u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const credHash = computeCredentialHash(nickClean, cidClean, phoneClean, discordClean, pinClean);
+    const credHash = await computeLoginHash(nickClean, pinClean);
     const vaultId = computeSecretVaultId(newId);
     const joinedAt = new Date().toISOString().slice(0, 10);
     const dept = (newUserData.department || (newUserData.role === 'employee' ? 'Цех добычи' : 'Руководство')).slice(0, 64);
@@ -1212,13 +1315,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           phone: target.phone,
           discord: target.discord,
           pin: target.pin,
-          credHash: computeCredentialHash(
-            target.displayName,
-            target.cid,
-            target.phone,
-            target.discord,
-            target.pin
-          ),
+          credHash: '',
         };
       }
     }
@@ -1239,13 +1336,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         target.rankName).slice(0, 64);
     const nextDepartment = (updates.department ?? target.department).slice(0, 64);
 
-    const nextCredHash = computeCredentialHash(
-      nextDisplayName,
-      nextCid,
-      nextPhone,
-      nextDiscord,
-      nextPin
-    );
+    const nextCredHash = await computeLoginHash(nextDisplayName, nextPin);
 
     try {
       // Ensure root anchor hash always exists so isRootOwnerSeeded() in rules never breaks
@@ -1350,6 +1441,81 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `staff_profiles/${userId}`);
     }
+  };
+
+  // Owner-only one-click migration of every staff account to the Nick+PIN hash scheme.
+  // Idempotent: accounts already carrying a Nick+PIN hash are skipped.
+  const migrateStaffToLoginHashes = async (): Promise<{
+    migrated: number;
+    skipped: number;
+    problems: string[];
+  }> => {
+    const report = { migrated: 0, skipped: 0, problems: [] as string[] };
+    if (currentUser?.role !== 'owner') {
+      report.problems.push('Миграцию запускает только Владелец корпорации.');
+      return report;
+    }
+
+    for (const u of users) {
+      const sec = secretsMapRef.current[u.id] || secretsMap[u.id];
+      if (!sec || !sec.pin) {
+        report.skipped += 1;
+        continue;
+      }
+      if (u.id === 'u-owner-root' && sec.pin === '7777') {
+        report.problems.push(
+          'Owner: сначала смените свой PIN-код (иконка ключа рядом с PIN в реестре), затем запустите миграцию снова — стандартный PIN 7777 переносить в новую систему нельзя.'
+        );
+        report.skipped += 1;
+        continue;
+      }
+      try {
+        const newHash = await computeLoginHash(u.displayName, sec.pin);
+        if (newHash === sec.credHash) {
+          report.skipped += 1;
+          continue;
+        }
+
+        const existing = await getDoc(doc(db, 'auth_hashes', newHash));
+        if (existing.exists() && String(existing.data().profileId) !== u.id) {
+          report.problems.push(
+            `${u.displayName}: хэш Ника+PIN уже занят другой учётной записью — смените PIN этому сотруднику и повторите.`
+          );
+          continue;
+        }
+
+        await setDoc(doc(db, 'auth_hashes', newHash), {
+          id: newHash,
+          profileId: u.id,
+          role: u.role,
+        });
+        await updateDoc(doc(db, 'staff_secrets', computeSecretVaultId(u.id)), {
+          credHash: newHash,
+        });
+        if (sec.credHash && sec.credHash !== ROOT_OWNER_HASH) {
+          try {
+            await deleteDoc(doc(db, 'auth_hashes', sec.credHash));
+          } catch {
+            // old hash may already be gone
+          }
+        }
+        const nextSecEntry = { ...sec, credHash: newHash };
+        secretsMapRef.current = { ...secretsMapRef.current, [u.id]: nextSecEntry };
+        setSecretsMap((prev) => ({ ...prev, [u.id]: nextSecEntry }));
+        report.migrated += 1;
+      } catch {
+        report.problems.push(`${u.displayName}: ошибка Firestore, сотрудник не перенесён.`);
+      }
+    }
+
+    if (report.migrated > 0) {
+      await addAuditLog(
+        'users',
+        'Миграция входа на Ник+PIN',
+        `Владелец перевёл ${report.migrated} учётных записей на вход Ник + PIN (SHA-256)`
+      );
+    }
+    return report;
   };
 
   const deleteUser = async (userId: string) => {
@@ -1774,13 +1940,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         phone: target.phone !== 'Скрыто (Защита БД)' ? target.phone : currentUser.phone,
         discord: target.discord !== 'Скрыто (Защита БД)' ? target.discord : currentUser.discord,
         pin: target.pin !== '••••' ? target.pin : currentUser.pin,
-        credHash: computeCredentialHash(
-          target.displayName,
-          target.cid,
-          target.phone !== 'Скрыто (Защита БД)' ? target.phone : currentUser.phone,
-          target.discord !== 'Скрыто (Защита БД)' ? target.discord : currentUser.discord,
-          target.pin !== '••••' ? target.pin : currentUser.pin
-        ),
+        credHash: '',
       };
     }
 
@@ -1799,13 +1959,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ? updates.bioNotes
         : target.bioNotes || '';
 
-    const nextCredHash = computeCredentialHash(
-      target.displayName,
-      target.cid,
-      nextPhone,
-      nextDiscord,
-      nextPin
-    );
+    const nextCredHash = await computeLoginHash(target.displayName, nextPin);
 
     try {
       // Ensure ROOT_OWNER_HASH anchor always exists so rules validation succeeds
@@ -2118,6 +2272,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         openArchitectureModal: () => setIsArchitectureModalOpen(true),
         closeArchitectureModal: () => setIsArchitectureModalOpen(false),
         loginWithCredentials,
+        migrateStaffToLoginHashes,
         createUserByAdmin,
         updateUserCredentialsByOwner,
         deleteUser,

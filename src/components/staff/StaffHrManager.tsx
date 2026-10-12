@@ -76,6 +76,7 @@ export const StaffHrManager: React.FC = () => {
     applications,
     createUserByAdmin,
     updateUserCredentialsByOwner,
+    migrateStaffToLoginHashes,
     deleteUser,
     updateStaffFarmStats,
     recordFarmSubmission,
@@ -91,6 +92,12 @@ export const StaffHrManager: React.FC = () => {
   const canEditVehAndNotes = ROLE_DEFINITIONS[userRole].permissions.canEditStaffVehicleAndNotes; // owner, admin
 
   const [activeTab, setActiveTab] = useState<'roster' | 'create' | 'applications'>('roster');
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const [migrationReport, setMigrationReport] = useState<{
+    migrated: number;
+    skipped: number;
+    problems: string[];
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
 
@@ -239,13 +246,14 @@ export const StaffHrManager: React.FC = () => {
 
   const handleCopyApproved = () => {
     if (!approvedCard) return;
-    const text = `Реквизиты для входа в портал APATHY:
-Ник: ${approvedCard.nick}
+    const text = `Доступы сотрудника APATHY (вход в портал: Ник + PIN):
+Ник (логин): ${approvedCard.nick}
+PIN-код: ${approvedCard.pin}
+Роль: ${approvedCard.roleTitle}
+---
 CID: ${approvedCard.cid}
 Телефон: ${approvedCard.phone}
-Discord: ${approvedCard.discord}
-PIN-код: ${approvedCard.pin}
-Роль: ${approvedCard.roleTitle}`;
+Discord: ${approvedCard.discord}`;
     navigator.clipboard.writeText(text);
     setCopiedApproved(true);
     setTimeout(() => setCopiedApproved(false), 2500);
@@ -296,16 +304,26 @@ PIN-код: ${approvedCard.pin}
 
   const handleCopyCredentials = () => {
     if (!createdCredentialsCard) return;
-    const text = `Реквизиты для входа в портал APATHY:
-Ник: ${createdCredentialsCard.nick}
+    const text = `Доступы сотрудника APATHY (вход в портал: Ник + PIN):
+Ник (логин): ${createdCredentialsCard.nick}
+PIN-код: ${createdCredentialsCard.pin}
+Роль: ${createdCredentialsCard.roleTitle}
+---
 CID: ${createdCredentialsCard.cid}
 Телефон: ${createdCredentialsCard.phone}
-Discord: ${createdCredentialsCard.discord}
-PIN-код: ${createdCredentialsCard.pin}
-Роль: ${createdCredentialsCard.roleTitle}`;
+Discord: ${createdCredentialsCard.discord}`;
     navigator.clipboard.writeText(text);
     setCopiedNotice(true);
     setTimeout(() => setCopiedNotice(false), 2500);
+  };
+
+  const handleRunMigration = async () => {
+    if (!isOwner || migrationBusy) return;
+    setMigrationBusy(true);
+    setMigrationReport(null);
+    const report = await migrateStaffToLoginHashes();
+    setMigrationReport(report);
+    setMigrationBusy(false);
   };
 
   const handleRoleChange = (userId: string, targetRole: UserRole) => {
@@ -887,6 +905,44 @@ PIN-код: ${createdCredentialsCard.pin}
       {/* TAB 1: CREATE USER (OWNER ONLY) */}
       {isOwner && activeTab === 'create' && (
         <div className="space-y-6">
+          <div className="p-6 rounded-2xl bg-zinc-950 border border-cyan-500/40 shadow-2xl font-mono-custom text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-cyan-400" />
+                  Переход на вход «Ник + PIN»
+                </h3>
+                <p className="text-[11px] text-zinc-400 mt-1 leading-relaxed">
+                  Один клик переводит все учётные записи на новую схему входа: SHA-256 от Ника и PIN-кода.
+                  Уже переведённые сотрудники пропускаются автоматически — повторное нажатие безопасно.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleRunMigration}
+                disabled={migrationBusy}
+                className="shrink-0 px-4 py-2.5 rounded-xl font-bold bg-cyan-500 hover:bg-cyan-400 text-black transition-all disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {migrationBusy ? 'Переношу...' : 'Перевести весь штат на Ник+PIN'}
+              </button>
+            </div>
+
+            {migrationReport && (
+              <div className="mt-4 space-y-2">
+                <div className="text-cyan-300">
+                  Готово: переведено {migrationReport.migrated}, пропущено {migrationReport.skipped}.
+                </div>
+                {migrationReport.problems.length > 0 && (
+                  <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/40 text-rose-300 space-y-1">
+                    {migrationReport.problems.map((p, i) => (
+                      <div key={i}>• {p}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="p-6 rounded-2xl bg-zinc-950 border border-purple-500/40 shadow-2xl relative overflow-hidden">
             <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-6">
               <div className="flex items-center gap-2.5">
@@ -898,7 +954,7 @@ PIN-код: ${createdCredentialsCard.pin}
                     Регистрация новой учетной записи
                   </h3>
                   <p className="text-[11px] text-zinc-400 font-mono-custom">
-                    Данные сохраняются в единую БД. Сотрудник входит по этим точным реквизитам.
+                    Данные сохраняются в единую БД. Вход в портал: Ник + PIN-код, остальные данные — справочные.
                   </p>
                 </div>
               </div>

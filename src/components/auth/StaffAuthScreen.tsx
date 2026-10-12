@@ -6,9 +6,6 @@ export const StaffAuthScreen: React.FC = () => {
   const { loginWithCredentials } = useDatabase();
 
   const [nick, setNick] = useState('');
-  const [cid, setCid] = useState('');
-  const [phone, setPhone] = useState('');
-  const [discord, setDiscord] = useState('');
   const [pin, setPin] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -17,17 +14,14 @@ export const StaffAuthScreen: React.FC = () => {
     e.preventDefault();
     setErrorMsg('');
 
-    if (!nick.trim() || !cid.trim() || !phone.trim() || !discord.trim() || !pin.trim()) {
-      setErrorMsg('Необходимо указать все 5 параметров: NickName, CID, Телефон, Discord тег и PIN-код.');
+    if (!nick.trim() || !pin.trim()) {
+      setErrorMsg('Укажите игровой NickName и персональный PIN-код.');
       return;
     }
 
     setIsSubmitting(true);
     const result = await loginWithCredentials({
-      displayName: nick.trim(),
-      cid: cid.trim().toUpperCase(),
-      phone: phone.trim(),
-      discord: discord.trim(),
+      nick: nick.trim(),
       pin: pin.trim(),
     });
 
@@ -73,7 +67,7 @@ export const StaffAuthScreen: React.FC = () => {
 
         <div className="p-6">
           <p className="text-xs text-zinc-400 mb-4 font-mono-custom leading-relaxed">
-            Вход разрешён исключительно сотрудникам, предварительно зарегистрированным <b className="text-white">Владельцем корпорации</b>. Все PIN-коды зашифрованы (SHA-256).
+            Вход по игровому нику и персональному PIN-коду. Реквизиты выдаёт <b className="text-white">Владелец корпорации</b>. PIN-коды защищены хэшем SHA-256 — сами коды в базе не хранятся.
           </p>
 
           {errorMsg && (
@@ -95,67 +89,25 @@ export const StaffAuthScreen: React.FC = () => {
                   value={nick}
                   onChange={(e) => setNick(e.target.value)}
                   placeholder="Name_Surname"
+                  autoComplete="username"
                   className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-mono-custom text-zinc-400 mb-1">
-                  CID в игре: <span className="text-rose-400">*</span>
+                  Персональный PIN-код: <span className="text-rose-400">*</span>
                 </label>
                 <input
-                  type="text"
+                  type="password"
                   required
-                  value={cid}
-                  onChange={(e) => setCid(e.target.value)}
-                  placeholder="XXXX"
-                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400 uppercase"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-mono-custom text-zinc-400 mb-1">
-                  Телефон в игре: <span className="text-rose-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="000-000"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="••••"
+                  autoComplete="current-password"
                   className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
                 />
               </div>
-
-              <div>
-                <label className="block text-xs font-mono-custom text-zinc-400 mb-1">
-                  Discord тег: <span className="text-rose-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={discord}
-                  onChange={(e) => setDiscord(e.target.value)}
-                  placeholder="username"
-                  className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-mono-custom text-zinc-400 mb-1">
-                Персональный PIN-код: <span className="text-rose-400">*</span>
-              </label>
-              <input
-                type="password"
-                required
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                placeholder="••••"
-                className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-white text-xs font-mono-custom focus:outline-none focus:border-cyan-400"
-              />
             </div>
 
             <button

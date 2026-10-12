@@ -75,39 +75,19 @@ export const ROOT_OWNER_HASH =
   '493280c790a2a988171849d2f24d47458732a4f59907d700222668162c6f275c';
 
 /**
- * Deterministic 256-bit (64-char hex) hash for zero-knowledge credential verification.
- * Protects PINs and credentials so raw PINs never appear in public profile documents.
+ * Deterministic 256-bit (64-char hex) login hash over Nick + PIN only,
+ * via the browser's native SHA-256 (WebCrypto). Raw PINs never leave the
+ * client as a stored credential: only this hash is written to /auth_hashes.
  */
-export function computeCredentialHash(
-  displayName: string,
-  cid: string,
-  phone: string,
-  discord: string,
-  pin: string
-): string {
-  const normalized = `${displayName.trim().toLowerCase()}:${cid.trim().toLowerCase()}:${phone
-    .trim()
-    .toLowerCase()}:${discord.trim().toLowerCase()}:${pin.trim()}`;
-
-  if (normalized === 'owner:0001:555-001:owner#0001:7777') {
-    return ROOT_OWNER_HASH;
-  }
-
-  const lanes = [
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-  ];
-  const salted = `apathy_rp_salt_v1::${normalized}::radmir`;
-  for (let i = 0; i < salted.length; i++) {
-    const code = salted.charCodeAt(i);
-    for (let j = 0; j < 8; j++) {
-      let h = lanes[j] ^ (code + i * 31 + j * 131);
-      h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
-      h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-      lanes[j] = (h ^ (h >>> 16)) >>> 0;
-    }
-  }
-  return lanes.map((l) => l.toString(16).padStart(8, '0')).join('');
+export async function computeLoginHash(displayName: string, pin: string): Promise<string> {
+  const normalized = `${displayName.trim().toLowerCase()}:${pin.trim()}`;
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(`apathy_login_v2::${normalized}`)
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /**
